@@ -1,0 +1,59 @@
+name: CI
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  ZIG_VERSION: "0.15.2"
+jobs:
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Zig
+        run: |
+          curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
+          echo "${PWD}/zig-x86_64-linux-${ZIG_VERSION}" >> $GITHUB_PATH
+      - name: Check formatting
+        run: zig fmt --check .
+  build-and-test:
+    name: Build & Test (${{ matrix.os }})
+    needs: fmt
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            zig-url-suffix: x86_64-linux
+            ext: tar.xz
+          - os: macos-latest
+            zig-url-suffix: aarch64-macos
+            ext: tar.xz
+          - os: windows-latest
+            zig-url-suffix: x86_64-windows
+            ext: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Zig (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-${{ matrix.zig-url-suffix }}-${ZIG_VERSION}.${{ matrix.ext }}" | tar -xJ
+          echo "${PWD}/zig-${{ matrix.zig-url-suffix }}-${ZIG_VERSION}" >> $GITHUB_PATH
+      - name: Install Zig (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri "https://ziglang.org/download/$env:ZIG_VERSION/zig-${{ matrix.zig-url-suffix }}-$env:ZIG_VERSION.${{ matrix.ext }}" -OutFile zig.zip
+          Expand-Archive zig.zip -DestinationPath .
+          echo "$PWD\zig-${{ matrix.zig-url-suffix }}-$env:ZIG_VERSION" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Build examples
+        run: zig build examples
+      - name: Run tests
+        run: zig build test
