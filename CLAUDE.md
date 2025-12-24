@@ -4,39 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-parsz is a command-line argument parser library using only the Zig standard library. It adopts a 3-stage pipeline design based on compiler theory.
+parsz is a command-line argument parser library using only the Zig standard library. It adopts a 3-stage pipeline design based on compiler theory (v1 targets single commands only, no subcommands).
 
-## Build and Test
+## Build Commands
 
 ```bash
-# Run tests
-zig build test
-
-# Fuzz testing (crash resistance verification)
-zig build test --fuzz
+zig build test          # Run tests
+zig build test --fuzz   # Fuzz testing (crash resistance)
+zig build examples      # Build examples
+zig fmt --check .       # Format check (CI runs this)
 ```
 
 ## Architecture
 
-### Pipeline Structure
-
 ```
 argv[] → Tokenizer → Token[] → Parser → RawResult → Validator → ParseResult
                                 ↑                      ↑
-                          CommandDef            CommandDef + constraints
+                          Command            Command + constraints
 ```
 
-### Core Components
-
-1. **Definition Layer** (`CommandDef`, `ArgDef`): Declarative CLI specification
-2. **Tokenizer**: Converts argv to Token array (lexical analysis)
-3. **Parser**: Generates RawResult from Token array (syntax analysis)
-4. **Validator**: Type conversion and constraint checking (semantic analysis)
-5. **API Layer**: Builder API (procedural), Spec API (compile-time reflection)
-
-### File Structure
-
-- `src/parsz.zig`: Main module
+This 3-stage pipeline mirrors compiler design:
+- **Tokenizer**: Lexical analysis (argv to Token array)
+- **Parser**: Syntax analysis (Token array to RawResult)
+- **Validator**: Semantic analysis (type conversion, constraint checking)
 
 ## Coding Conventions
 
@@ -44,19 +34,11 @@ argv[] → Tokenizer → Token[] → Parser → RawResult → Validator → Pars
 
 - All functions explicitly receive an Allocator
 - Use `defer` / `errdefer` to separate cleanup for success/failure paths
-- Guarantee reliable memory cleanup on errors
 
-### Error Design
+### Testing
 
-- `ParseError` holds diagnostic information (structured data)
-- Display is handled by a separate rendering layer
-- Report multiple errors at once when possible
-
-### Testing Strategy
-
-- Unit tests: Concrete examples and edge cases
-- Property-based tests: Use `std.testing.fuzz`
-- Each property test should include a comment referencing the design document property number:
+- Property-based tests use `std.testing.fuzz`
+- Reference design doc properties in test comments:
   ```zig
   // **Feature: zig-cli-parser, Property 1: Command definition validation**
   ```
