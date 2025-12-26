@@ -1,14 +1,14 @@
 //! Test: duplicate Arg.name in Command
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const cmd = defs.Command{
+    const cmd = parsz.Command{
         .name = "myapp",
         .args = &.{
             .{ .name = "foo", .kind = .option, .long = "foo" },
             .{ .name = "foo", .kind = .option, .long = "bar" }, // Invalid: duplicate name
         },
     };
-    cmd.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

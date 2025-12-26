@@ -1,12 +1,13 @@
 //! Test: long must not be empty
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "bad_option",
-        .kind = .option,
-        .long = "", // Invalid: long must not be empty
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "bad_option", .kind = .option, .long = "" }, // Invalid: long must not be empty
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

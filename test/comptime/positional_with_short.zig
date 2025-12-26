@@ -1,12 +1,13 @@
 //! Test: positional cannot have long or short
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "bad_positional",
-        .kind = .positional,
-        .short = 'x', // Invalid: positional cannot have short
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "bad_positional", .kind = .positional, .short = 'x' }, // Invalid: positional cannot have short
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

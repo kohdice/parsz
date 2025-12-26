@@ -1,12 +1,13 @@
 //! Test: long must start with a letter
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "bad_option",
-        .kind = .option,
-        .long = "123invalid", // Invalid: long must start with a letter
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "bad_option", .kind = .option, .long = "123invalid" }, // Invalid: long must start with a letter
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

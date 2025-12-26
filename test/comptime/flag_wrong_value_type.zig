@@ -1,13 +1,13 @@
 //! Test: flag must have boolean value_type
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "bad_flag",
-        .kind = .flag,
-        .value_type = .string, // Invalid: flag must be boolean
-        .short = 'x',
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "bad_flag", .kind = .flag, .value_type = .string, .short = 'x' }, // Invalid: flag must be boolean
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

@@ -1,12 +1,13 @@
 //! Test: option must have long or short
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "bad_option",
-        .kind = .option,
-        // Invalid: no short or long specified
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "bad_option", .kind = .option }, // Invalid: no long or short
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

@@ -1,14 +1,14 @@
 //! Test: positional cannot come after a multiple positional
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const cmd = defs.Command{
+    const cmd = parsz.Command{
         .name = "myapp",
         .args = &.{
             .{ .name = "files", .kind = .positional, .multiple = true },
             .{ .name = "output", .kind = .positional }, // Invalid: after multiple positional
         },
     };
-    cmd.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

@@ -1,14 +1,13 @@
 //! Test: flag cannot be multiple
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "bad_flag",
-        .kind = .flag,
-        .value_type = .boolean,
-        .short = 'x',
-        .multiple = true, // Invalid: flag cannot be multiple
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "bad_flag", .kind = .flag, .value_type = .boolean, .short = 'x', .multiple = true }, // Invalid: flag cannot be multiple
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

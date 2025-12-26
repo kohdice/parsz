@@ -71,6 +71,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
         .{ "test/comptime/duplicate_name.zig", "duplicate Arg.name 'foo'" },
         .{ "test/comptime/duplicate_short.zig", "duplicate Arg.short '-x' between 'foo' and 'bar'" },
+        .{ "test/comptime/duplicate_long.zig", "duplicate Arg.long '--same' between 'foo' and 'bar'" },
         .{ "test/comptime/positional_after_multiple.zig", "cannot come after a multiple positional argument" },
     };
 

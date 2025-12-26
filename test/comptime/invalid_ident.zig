@@ -1,12 +1,13 @@
 //! Test: name must be a valid Zig identifier
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "123invalid", // Invalid: starts with digit
-        .kind = .option,
-        .long = "test",
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "123invalid", .kind = .option, .long = "test" }, // Invalid: starts with digit
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }

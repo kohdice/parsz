@@ -1,14 +1,13 @@
 //! Test: flag cannot have default value
 
-const defs = @import("parsz");
+const parsz = @import("parsz");
 
 comptime {
-    const arg = defs.Arg{
-        .name = "bad_flag",
-        .kind = .flag,
-        .value_type = .boolean,
-        .short = 'x',
-        .default = "true", // Invalid: flag cannot have default
+    const cmd = parsz.Command{
+        .name = "test",
+        .args = &.{
+            .{ .name = "bad_flag", .kind = .flag, .value_type = .boolean, .short = 'x', .default = "true" }, // Invalid: flag cannot have default
+        },
     };
-    arg.validate();
+    parsz.parse(undefined, &.{}, cmd);
 }
