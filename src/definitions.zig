@@ -12,7 +12,7 @@ pub const ArgKind = enum {
     positional,
 };
 
-/// Value type for arguments. Maps to Zig types via `ValueTypeToZigType`.
+/// Value type for arguments.
 pub const ValueType = enum {
     integer,
     float,
@@ -20,7 +20,7 @@ pub const ValueType = enum {
     string,
 };
 
-/// Single argument definition. Call `validate()` at comptime to check validity.
+/// Single argument definition.
 pub const Arg = struct {
     /// Valid Zig identifier (required)
     name: []const u8,
@@ -36,15 +36,6 @@ pub const Arg = struct {
     help: ?[]const u8 = null,
     /// Allow multiple occurrences
     multiple: bool = false,
-
-    /// Validate definition at comptime.
-    pub fn validate(comptime self: Arg) void {
-        validateIdent(self.name);
-        validateKindRules(self);
-        validateConstraints(self);
-        validateNameFormats(self);
-        validateDefault(self);
-    }
 };
 
 /// Command definition holding multiple `Arg`s.
@@ -53,19 +44,30 @@ pub const Command = struct {
     name: []const u8,
     about: ?[]const u8 = null,
     args: []const Arg = &.{},
-
-    /// Validate command and all args at comptime.
-    pub fn validate(comptime self: Command) void {
-        if (self.name.len == 0) {
-            @compileError("Invalid Command definition: name cannot be empty");
-        }
-        inline for (self.args) |arg| {
-            arg.validate();
-        }
-        validateArgUniqueness(self);
-        validatePositionalOrder(self);
-    }
 };
+
+/// Validate Arg at comptime.
+pub fn validateArg(comptime arg: Arg) void {
+    validateIdent(arg.name);
+    validateKindRules(arg);
+    validateConstraints(arg);
+    validateNameFormats(arg);
+    validateDefault(arg);
+}
+
+/// Validate Command and all Args at comptime.
+pub fn validateCommand(comptime cmd: Command) void {
+    if (cmd.name.len == 0) {
+        @compileError("Invalid Command definition: name cannot be empty");
+    }
+
+    inline for (cmd.args) |arg| {
+        validateArg(arg);
+    }
+
+    validateArgUniqueness(cmd);
+    validatePositionalOrder(cmd);
+}
 
 fn compileErrorInvalidDefinition(
     comptime context_type: []const u8,
@@ -175,9 +177,11 @@ fn validateNameFormats(comptime arg: Arg) void {
         if (lname.len == 0) {
             compileErrorInvalidDefinition("Arg", arg.name, "long must not be empty", .{});
         }
+
         if (!std.ascii.isAlphabetic(lname[0])) {
             compileErrorInvalidDefinition("Arg", arg.name, "long must start with a letter", .{});
         }
+
         for (lname[1..]) |c| {
             if (!(std.ascii.isAlphabetic(c) or std.ascii.isDigit(c) or c == '-' or c == '_')) {
                 compileErrorInvalidDefinition("Arg", arg.name, "long contains invalid character", .{});
@@ -250,6 +254,7 @@ fn validatePositionalOrder(comptime cmd: Command) void {
                     .{arg.name},
                 );
             }
+
             if (arg.multiple) {
                 found_multiple = true;
             }
