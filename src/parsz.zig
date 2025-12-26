@@ -1,9 +1,13 @@
 const std = @import("std");
 
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+const definitions = @import("definitions.zig");
+const errors = @import("errors.zig");
 
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
-}
+// definitions
+pub const Arg = definitions.Arg;
+pub const ArgKind = definitions.ArgKind;
+pub const Command = definitions.Command;
+pub const ValueType = definitions.ValueType;
+
+// errors
+pub const ParseError = errors.ParseError;
