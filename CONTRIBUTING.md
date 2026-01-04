@@ -12,12 +12,33 @@ Together, we can make **parsz** even better!
 
 ## Table of Contents
 
-1. [How to Contribute](#how-to-contribute)
+1. [Developer Guide](#developer-guide)
+   - [Setup](#setup)
+   - [Build and Test](#build-and-test)
+2. [How to Contribute](#how-to-contribute)
    - [Issues](#issues)
    - [Pull Requests](#pull-requests)
    - [Documentation](#documentation)
-2. [Git Commit Guidelines](#git-commit-guidelines)
+3. [Git Commit Guidelines](#git-commit-guidelines)
    - [Type](#type)
+
+## Developer Guide
+
+### Setup
+
+```bash
+# With direnv
+direnv allow
+
+# Without direnv
+nix develop
+```
+
+### Build and Test
+
+```bash
+zig build test
+```
 
 ## How to Contribute
 
