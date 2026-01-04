@@ -83,6 +83,8 @@ Commit messages must follow one of the following types:
 - **style**: Changes that do not affect the meaning of the code (e.g., white-space, formatting, missing semi-colons)
 - **chore**: Changes to the build process or auxiliary tools and libraries such as documentation generation
 - **docs**: Documentation only changes
+- **ci**: Changes to CI configuration files and scripts
+- **perf**: A code change that improves performance
 
 ---
 
