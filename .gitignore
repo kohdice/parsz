@@ -12,6 +12,3 @@ Thumbs.db
 # Claude
 .claude/settings.local.json
 .mcp.json
-
-# Codex
-.codex/config.toml
