@@ -45,11 +45,6 @@
             nativeBuildInputs = [
               zig
             ];
-
-            shellHook = ''
-              echo "parsz"
-              echo "Zig version: $(zig version)"
-            '';
           };
         }
       );
