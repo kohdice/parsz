@@ -12,12 +12,33 @@ Together, we can make **parsz** even better!
 
 ## Table of Contents
 
-1. [How to Contribute](#how-to-contribute)
+1. [Developer Guide](#developer-guide)
+   - [Setup](#setup)
+   - [Build and Test](#build-and-test)
+2. [How to Contribute](#how-to-contribute)
    - [Issues](#issues)
    - [Pull Requests](#pull-requests)
    - [Documentation](#documentation)
-2. [Git Commit Guidelines](#git-commit-guidelines)
+3. [Git Commit Guidelines](#git-commit-guidelines)
    - [Type](#type)
+
+## Developer Guide
+
+### Setup
+
+```bash
+# With direnv
+direnv allow
+
+# Without direnv
+nix develop
+```
+
+### Build and Test
+
+```bash
+zig build test
+```
 
 ## How to Contribute
 
@@ -62,6 +83,8 @@ Commit messages must follow one of the following types:
 - **style**: Changes that do not affect the meaning of the code (e.g., white-space, formatting, missing semi-colons)
 - **chore**: Changes to the build process or auxiliary tools and libraries such as documentation generation
 - **docs**: Documentation only changes
+- **ci**: Changes to CI configuration files and scripts
+- **perf**: A code change that improves performance
 
 ---
 

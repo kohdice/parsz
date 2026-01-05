@@ -5,13 +5,14 @@ zig-out/
 # env file
 .env
 
+# direnv
+.direnv/
+.envrc.local
+
 # OS metadata
 .DS_Store
 Thumbs.db
 
 # Claude
-.claude/settings.local.json
+settings.local.json
 .mcp.json
-
-# Codex
-.codex/config.toml
