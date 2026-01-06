@@ -201,7 +201,7 @@ fn validateDefault(comptime arg: Arg) void {
             };
         },
         .float => {
-            _ = std.parseFloat(f64, def) catch {
+            _ = std.fmt.parseFloat(f64, def) catch {
                 compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
             };
         },
