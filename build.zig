@@ -69,6 +69,8 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/long_empty.zig", "long must not be empty" },
         .{ "test/comptime/long_invalid_start.zig", "long must start with a letter" },
         .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
+        .{ "test/comptime/default_invalid_float.zig", "is not a valid float" },
+        .{ "test/comptime/default_invalid_boolean.zig", "is not a valid boolean" },
         .{ "test/comptime/duplicate_name.zig", "duplicate Arg.name 'foo'" },
         .{ "test/comptime/duplicate_short.zig", "duplicate Arg.short '-x' between 'foo' and 'bar'" },
         .{ "test/comptime/duplicate_long.zig", "duplicate Arg.long '--same' between 'foo' and 'bar'" },
