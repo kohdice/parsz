@@ -55,26 +55,44 @@ pub fn build(b: *std.Build) void {
 
     // Error tests - each expects a specific compile error
     const error_tests = .{
+        // Command validation
+        .{ "test/comptime/command_empty_name.zig", "name cannot be empty" },
+
+        // Arg.name validation
         .{ "test/comptime/invalid_ident.zig", "name must be a valid Zig identifier" },
+
+        // Kind rules: flag
         .{ "test/comptime/flag_wrong_value_type.zig", "flag must have boolean value_type, got string" },
         .{ "test/comptime/flag_multiple.zig", "flag cannot be multiple" },
         .{ "test/comptime/flag_with_default.zig", "flag cannot have default value" },
         .{ "test/comptime/flag_required.zig", "flag cannot be required" },
         .{ "test/comptime/flag_no_short_long.zig", "flag must have long or short." },
+
+        // Kind rules: option
         .{ "test/comptime/option_no_short_long.zig", "option must have long or short." },
+
+        // Kind rules: positional
         .{ "test/comptime/positional_with_short.zig", "positional cannot have long or short." },
-        .{ "test/comptime/required_with_default.zig", "required and default cannot both be set" },
-        .{ "test/comptime/multiple_with_default.zig", "multiple cannot have default" },
+        .{ "test/comptime/positional_after_multiple.zig", "cannot come after a multiple positional argument" },
+
+        // Short/long format validation
         .{ "test/comptime/short_dash.zig", "short must be alphanumeric" },
         .{ "test/comptime/long_empty.zig", "long must not be empty" },
         .{ "test/comptime/long_invalid_start.zig", "long must start with a letter" },
+
+        // Default value validation
         .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
         .{ "test/comptime/default_invalid_float.zig", "is not a valid float" },
         .{ "test/comptime/default_invalid_boolean.zig", "is not a valid boolean" },
+
+        // Cross-field constraints
+        .{ "test/comptime/required_with_default.zig", "required and default cannot both be set" },
+        .{ "test/comptime/multiple_with_default.zig", "multiple cannot have default" },
+
+        // Uniqueness validation
         .{ "test/comptime/duplicate_name.zig", "duplicate Arg.name 'foo'" },
         .{ "test/comptime/duplicate_short.zig", "duplicate Arg.short '-x' between 'foo' and 'bar'" },
         .{ "test/comptime/duplicate_long.zig", "duplicate Arg.long '--same' between 'foo' and 'bar'" },
-        .{ "test/comptime/positional_after_multiple.zig", "cannot come after a multiple positional argument" },
     };
 
     inline for (error_tests) |test_case| {
