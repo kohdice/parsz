@@ -79,6 +79,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/short_dash.zig", "short must be alphanumeric" },
         .{ "test/comptime/long_empty.zig", "long must not be empty" },
         .{ "test/comptime/long_invalid_start.zig", "long must start with a letter" },
+        .{ "test/comptime/long_invalid_char.zig", "long contains invalid character" },
 
         // Default value validation
         .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
