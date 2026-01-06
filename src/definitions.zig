@@ -168,8 +168,8 @@ fn validateConstraints(comptime arg: Arg) void {
 
 fn validateNameFormats(comptime arg: Arg) void {
     if (arg.short) |c| {
-        if (c == '-') {
-            compileErrorInvalidDefinition("Arg", arg.name, "short cannot be '-'", .{});
+        if (!std.ascii.isAlphanumeric(c)) {
+            compileErrorInvalidDefinition("Arg", arg.name, "short must be alphanumeric", .{});
         }
     }
 
@@ -183,7 +183,7 @@ fn validateNameFormats(comptime arg: Arg) void {
         }
 
         for (lname[1..]) |c| {
-            if (!(std.ascii.isAlphabetic(c) or std.ascii.isDigit(c) or c == '-' or c == '_')) {
+            if (!(std.ascii.isAlphanumeric(c) or c == '-' or c == '_')) {
                 compileErrorInvalidDefinition("Arg", arg.name, "long contains invalid character", .{});
             }
         }

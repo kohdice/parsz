@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/positional_with_short.zig", "positional cannot have long or short." },
         .{ "test/comptime/required_with_default.zig", "required and default cannot both be set" },
         .{ "test/comptime/multiple_with_default.zig", "multiple cannot have default" },
-        .{ "test/comptime/short_dash.zig", "short cannot be '-'" },
+        .{ "test/comptime/short_dash.zig", "short must be alphanumeric" },
         .{ "test/comptime/long_empty.zig", "long must not be empty" },
         .{ "test/comptime/long_invalid_start.zig", "long must start with a letter" },
         .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
