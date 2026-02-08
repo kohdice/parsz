@@ -57,7 +57,8 @@ pub fn parse(
 /// Free any memory owned by a ParseResult.
 ///
 /// This releases backing arrays for `multiple` arguments.
-/// For commands with no `multiple` arguments, this is a no-op.
+/// For commands with no `multiple` arguments, no memory is freed,
+/// but the result is still poisoned (see WARNING below).
 ///
 /// WARNING: Do not call deinit() twice on the same result. After the first
 /// call, the result is poisoned (`= undefined`), so a second call will trigger
@@ -605,7 +606,7 @@ test "integration: command with no args, empty argv succeeds" {
     _ = try parse(testing.allocator, argv, cmd, null);
 }
 
-test "integration: deinit is no-op for command with no multiple args" {
+test "integration: deinit is safe for command with no multiple args" {
     const cmd = Command{
         .name = "app",
         .args = &.{
@@ -650,8 +651,9 @@ test "integration: diagnostic on TooManyPositionals with zero positional defs" {
 //
 // These tests use FailingAllocator to verify that every allocation failure
 // point in the pipeline is handled without leaking memory. The pattern:
-// try each fail_index from 0 upward; on OOM verify no leak via the backing
-// testing.allocator (GPA); on success, clean up and break.
+// try each fail_index from 0 upward; on OOM the backing GeneralPurposeAllocator
+// (testing.allocator) detects any leak when it goes out of scope at test end;
+// on success, clean up and break.
 
 /// OOM-safety test helper: verifies that every allocation failure point
 /// in the pipeline is handled without leaking memory.

@@ -22,7 +22,7 @@ pub const Token = union(enum) {
     /// elements are positional arguments.
     end_of_options,
 
-    /// A bare string, "-" alone, or any element after "--".
+    /// A bare string, "-" alone, "--=" / "--=..." (malformed long option), or any element after "--".
     positional: []const u8,
 };
 

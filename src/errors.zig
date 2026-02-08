@@ -60,8 +60,8 @@ pub const ParseError = error{
     /// Example: -x / --unknown
     UnknownFlag,
 
-    /// An option that requires a value was given without one.
-    /// Example: --output <value> with the value missing
+    /// An option was given without its value.
+    /// Example: --output (with no following argument)
     MissingValue,
 
     /// A required argument was not provided.

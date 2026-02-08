@@ -230,6 +230,9 @@ fn validateMultipleField(
         return try raw_list.toOwnedSlice(allocator);
     }
 
+    // Ownership: allocate a new typed slice and convert each string element.
+    // The raw_list's backing buffer is NOT transferred (unlike the string case
+    // above); it will be freed by deinitRawResult() after validate() returns.
     const items = raw_list.items;
     const result = try allocator.alloc(T, items.len);
     errdefer allocator.free(result);
@@ -250,7 +253,7 @@ fn validateMultipleField(
 
 /// Free any heap-allocated `multiple` field slices in a ParseResult.
 ///
-/// Safe to call even when no `multiple` fields exist (no-op). After
+/// Safe to call even when no `multiple` fields exist (no memory is freed). After
 /// deinit, the result struct is poisoned to `undefined` to catch
 /// use-after-free in Debug/ReleaseSafe builds.
 pub fn deinitResult(
