@@ -53,6 +53,8 @@ pub fn build(b: *std.Build) void {
 
         // Arg.name validation
         .{ "test/comptime/invalid_ident.zig", "name must be a valid Zig identifier" },
+        .{ "test/comptime/empty_arg_name.zig", "name must be a valid Zig identifier" },
+        .{ "test/comptime/invalid_ident_hyphen.zig", "name must be a valid Zig identifier" },
 
         // Kind rules: flag
         .{ "test/comptime/flag_wrong_value_type.zig", "flag must have boolean value_type, got string" },
@@ -66,6 +68,7 @@ pub fn build(b: *std.Build) void {
 
         // Kind rules: positional
         .{ "test/comptime/positional_with_short.zig", "positional cannot have long or short" },
+        .{ "test/comptime/positional_with_long.zig", "positional cannot have long or short" },
         .{ "test/comptime/positional_after_multiple.zig", "cannot come after a multiple positional argument" },
         .{ "test/comptime/required_positional_after_optional.zig", "required positional Arg 'filename' cannot come after an optional positional argument" },
 
