@@ -7,7 +7,7 @@
 /// - flag_name: for known long options/flags (parser), comptime literal (static);
 ///   for known short options/flags (parser), argv slice (argv lifetime);
 ///   for unknown flags, argv slice (argv lifetime).
-///   In validator errors (MissingRequired/InvalidValue), always comptime (static).
+///   In validator errors (MissingRequired/InvalidValue/ValueOutOfRange), always comptime (static).
 /// - provided_value: when non-empty, always an argv slice (argv lifetime);
 ///   when empty (default ""), a comptime literal (static lifetime).
 ///
@@ -48,7 +48,7 @@ pub const Diagnostic = struct {
     /// For known long options/flags (parser): comptime literal (static lifetime).
     /// For known short options/flags (parser): a 1-byte slice from the argv
     ///   element (argv lifetime), e.g., "o" for -o.
-    /// For validator errors (MissingRequired/InvalidValue): comptime literal (static).
+    /// For validator errors (MissingRequired/InvalidValue/ValueOutOfRange): comptime literal (static).
     /// For positionals: empty string.
     flag_name: []const u8 = "",
     /// The value string that caused the error (e.g., "abc" for --count=abc).

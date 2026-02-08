@@ -209,6 +209,11 @@ fn handleLong(
     return ParseError.UnknownFlag;
 }
 
+/// Assign a positional value to the next unbound positional argument definition.
+///
+/// Uses positional_index to track which positional Arg should receive the next value.
+/// For non-multiple args, the index advances after assignment. For multiple args,
+/// the index stays, so all subsequent positional values accumulate in the same field.
 fn handlePositional(
     comptime cmd: Command,
     result: *RawResult(cmd),
@@ -246,6 +251,9 @@ fn handlePositional(
     return ParseError.TooManyPositionals;
 }
 
+/// Assign a value to a named option field in the RawResult.
+/// For multiple options: appends to the ArrayListUnmanaged.
+/// For single options: sets the field, or returns DuplicateArg if already set.
 fn assignValue(
     comptime cmd: Command,
     result: *RawResult(cmd),
