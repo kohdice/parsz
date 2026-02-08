@@ -27,6 +27,7 @@ pub const ParseResult = validator.ParseResult;
 ///
 /// `argv` should NOT include the program name (argv[0]).
 /// Callers typically pass `args[1..]` from `std.process.argsAlloc(allocator)`.
+/// See `examples/sample.zig` for a complete argv slicing pattern.
 ///
 /// The Command definition is validated at compile time. At runtime:
 ///   1. Tokenizer classifies each argv element (zero allocation)
@@ -881,4 +882,91 @@ test "integration: '--' consumed as option value when option expects value" {
     const result = try parse(testing.allocator, argv, cmd, null);
     try testing.expectEqualStrings("--", result.output);
     try testing.expectEqualStrings("file.txt", result.file.?);
+}
+
+test "integration: digit as short option character" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "single", .kind = .flag, .value_type = .boolean, .short = '1' },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"-1"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expect(result.single == true);
+}
+
+test "integration: optional positional without default returns null" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "input", .kind = .positional },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqual(@as(?[]const u8, null), result.input);
+}
+
+test "integration: non-string positional with default" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "port", .kind = .positional, .value_type = .integer, .default = "8080" },
+        },
+    };
+
+    // No positional provided → default "8080" is applied and converted to i64
+    {
+        const argv: []const [:0]const u8 = &.{};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqual(@as(i64, 8080), result.port);
+    }
+    // Positional provided → overrides default
+    {
+        const argv: []const [:0]const u8 = &.{"3000"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqual(@as(i64, 3000), result.port);
+    }
+}
+
+test "integration: '--=value' treated as positional" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "file", .kind = .positional, .required = true },
+        },
+    };
+
+    // "--=value" is a malformed long option (first char after "--" is '='),
+    // so the tokenizer classifies it as a positional string.
+    const argv: []const [:0]const u8 = &.{"--=value"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqualStrings("--=value", result.file);
+}
+
+test "integration: single required boolean positional" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "confirm", .kind = .positional, .value_type = .boolean, .required = true },
+        },
+    };
+
+    {
+        const argv: []const [:0]const u8 = &.{"true"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expect(result.confirm == true);
+    }
+    {
+        const argv: []const [:0]const u8 = &.{"false"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expect(result.confirm == false);
+    }
+    {
+        const argv: []const [:0]const u8 = &.{"maybe"};
+        try testing.expectError(ParseError.InvalidValue, parse(testing.allocator, argv, cmd, null));
+    }
 }
