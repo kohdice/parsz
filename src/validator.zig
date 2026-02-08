@@ -938,6 +938,41 @@ test "validator: diagnostic on float ValueOutOfRange includes all fields" {
     try testing.expectEqualStrings("1e999", diagnostic.provided_value);
 }
 
+test "validator: multiple float ValueOutOfRange" {
+    const cmd = Command{
+        .name = "mf",
+        .args = &.{
+            .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
+        },
+    };
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{ "--ratio=1.5", "--ratio=1e999" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("ratios", diagnostic.arg_name);
+    try testing.expectEqualStrings("ratio", diagnostic.flag_name);
+    try testing.expectEqualStrings("1e999", diagnostic.provided_value);
+}
+
+test "validator: f64 boundary values succeed" {
+    // 1e308 is within f64 range, should succeed
+    {
+        var tok = Tokenizer{ .args = &.{"--ratio=1e308"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+        const result = try validate(testing.allocator, float_cmd, &raw, null);
+        try testing.expectApproxEqAbs(@as(f64, 1e308), result.ratio, 1e293);
+    }
+    // -1e308 is within f64 range, should succeed
+    {
+        var tok = Tokenizer{ .args = &.{"--ratio=-1e308"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+        const result = try validate(testing.allocator, float_cmd, &raw, null);
+        try testing.expectApproxEqAbs(@as(f64, -1e308), result.ratio, 1e293);
+    }
+}
+
 test "validator: diagnostic on MissingRequired for short-only option" {
     const short_only_req_cmd = Command{
         .name = "sor",

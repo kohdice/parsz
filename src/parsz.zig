@@ -852,6 +852,21 @@ test "integration: ValueOutOfRange for float overflow" {
     try testing.expectEqualStrings("1e999", diagnostic.provided_value);
 }
 
+test "integration: float non-finite literal rejected as InvalidValue" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .required = true },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{"--ratio=inf"};
+    try testing.expectError(ParseError.InvalidValue, parse(testing.allocator, argv, cmd, &diagnostic));
+    try testing.expectEqualStrings("ratio", diagnostic.arg_name);
+    try testing.expectEqualStrings("inf", diagnostic.provided_value);
+}
+
 test "integration: '--' consumed as option value when option expects value" {
     const cmd = Command{
         .name = "app",
