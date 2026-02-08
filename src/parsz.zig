@@ -653,16 +653,9 @@ test "integration: diagnostic on TooManyPositionals with zero positional defs" {
 // try each fail_index from 0 upward; on OOM verify no leak via the backing
 // testing.allocator (GPA); on success, clean up and break.
 
-test "integration: OutOfMemory does not leak (multiple string positional)" {
-    const cmd = Command{
-        .name = "app",
-        .args = &.{
-            .{ .name = "files", .kind = .positional, .multiple = true },
-        },
-    };
-
-    const argv: []const [:0]const u8 = &.{ "a.txt", "b.txt", "c.txt" };
-
+/// OOM-safety test helper: verifies that every allocation failure point
+/// in the pipeline is handled without leaking memory.
+fn testOomSafety(comptime cmd: Command, argv: []const [:0]const u8) !void {
     var fail_index: usize = 0;
     while (fail_index < 100) : (fail_index += 1) {
         var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
@@ -679,6 +672,16 @@ test "integration: OutOfMemory does not leak (multiple string positional)" {
     try testing.expect(fail_index < 100);
 }
 
+test "integration: OutOfMemory does not leak (multiple string positional)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "files", .kind = .positional, .multiple = true },
+        },
+    };
+    try testOomSafety(cmd, &.{ "a.txt", "b.txt", "c.txt" });
+}
+
 test "integration: OutOfMemory does not leak (multiple integer option)" {
     const cmd = Command{
         .name = "app",
@@ -686,23 +689,7 @@ test "integration: OutOfMemory does not leak (multiple integer option)" {
             .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
         },
     };
-
-    const argv: []const [:0]const u8 = &.{ "--num=1", "--num=2", "--num=3" };
-
-    var fail_index: usize = 0;
-    while (fail_index < 100) : (fail_index += 1) {
-        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
-        const alloc = failing.allocator();
-
-        var result = parse(alloc, argv, cmd, null) catch |err| {
-            try testing.expectEqual(error.OutOfMemory, err);
-            continue;
-        };
-        deinit(cmd, &result, alloc);
-        break;
-    }
-    // Sentinel: ensure at least one iteration succeeded before reaching the limit.
-    try testing.expect(fail_index < 100);
+    try testOomSafety(cmd, &.{ "--num=1", "--num=2", "--num=3" });
 }
 
 test "integration: OutOfMemory does not leak (two multiple fields, partial success)" {
@@ -713,23 +700,7 @@ test "integration: OutOfMemory does not leak (two multiple fields, partial succe
             .{ .name = "files", .kind = .positional, .multiple = true },
         },
     };
-
-    const argv: []const [:0]const u8 = &.{ "--num=1", "--num=2", "a.txt", "b.txt" };
-
-    var fail_index: usize = 0;
-    while (fail_index < 100) : (fail_index += 1) {
-        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
-        const alloc = failing.allocator();
-
-        var result = parse(alloc, argv, cmd, null) catch |err| {
-            try testing.expectEqual(error.OutOfMemory, err);
-            continue;
-        };
-        deinit(cmd, &result, alloc);
-        break;
-    }
-    // Sentinel: ensure at least one iteration succeeded before reaching the limit.
-    try testing.expect(fail_index < 100);
+    try testOomSafety(cmd, &.{ "--num=1", "--num=2", "a.txt", "b.txt" });
 }
 
 test "integration: OutOfMemory does not leak (multiple float option)" {
@@ -739,22 +710,7 @@ test "integration: OutOfMemory does not leak (multiple float option)" {
             .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
         },
     };
-
-    const argv: []const [:0]const u8 = &.{ "--ratio=1.5", "--ratio=2.0", "--ratio=3.14" };
-
-    var fail_index: usize = 0;
-    while (fail_index < 100) : (fail_index += 1) {
-        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
-        const alloc = failing.allocator();
-
-        var result = parse(alloc, argv, cmd, null) catch |err| {
-            try testing.expectEqual(error.OutOfMemory, err);
-            continue;
-        };
-        deinit(cmd, &result, alloc);
-        break;
-    }
-    try testing.expect(fail_index < 100);
+    try testOomSafety(cmd, &.{ "--ratio=1.5", "--ratio=2.0", "--ratio=3.14" });
 }
 
 test "integration: OutOfMemory does not leak (mixed multiple + required non-multiple)" {
@@ -766,20 +722,5 @@ test "integration: OutOfMemory does not leak (mixed multiple + required non-mult
             .{ .name = "files", .kind = .positional, .multiple = true },
         },
     };
-
-    const argv: []const [:0]const u8 = &.{ "--output", "out.txt", "--num=1", "--num=2", "a.txt", "b.txt" };
-
-    var fail_index: usize = 0;
-    while (fail_index < 100) : (fail_index += 1) {
-        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
-        const alloc = failing.allocator();
-
-        var result = parse(alloc, argv, cmd, null) catch |err| {
-            try testing.expectEqual(error.OutOfMemory, err);
-            continue;
-        };
-        deinit(cmd, &result, alloc);
-        break;
-    }
-    try testing.expect(fail_index < 100);
+    try testOomSafety(cmd, &.{ "--output", "out.txt", "--num=1", "--num=2", "a.txt", "b.txt" });
 }
