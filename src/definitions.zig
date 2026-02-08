@@ -129,8 +129,8 @@ pub fn parseBool(value: []const u8) ParseBoolError!bool {
 }
 
 /// Check whether a string represents a hex float literal (0x/0X prefix, with optional leading sign).
-/// Used by both comptime validation (validateDefault) and runtime conversion (convertValue)
-/// to reject hex float notation in CLI float arguments.
+/// Used by comptime validation (validateDefault, convertDefault) and runtime conversion
+/// (convertValue) to reject hex float notation in CLI float arguments.
 pub fn isHexFloat(str: []const u8) bool {
     const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
     return s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X');

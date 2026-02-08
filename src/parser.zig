@@ -4,6 +4,11 @@
 //! ambiguities (e.g., is `-o file` an option with value, or a flag + positional?).
 //! Generates RawResult — a comptime struct whose fields are bool (flags),
 //! ?[]const u8 (single options/positionals), or ArrayListUnmanaged (multiple).
+//!
+//! Note: This parser deliberately deviates from POSIX Guideline 9
+//! (all options before operands). Options and positional arguments can be
+//! freely interleaved (GNU-style permutation), matching modern CLI tool
+//! behavior (e.g., git, cargo, gcc).
 
 const std = @import("std");
 const definitions = @import("definitions.zig");
@@ -174,11 +179,11 @@ fn handleLong(
             if (std.mem.eql(u8, name, long_name)) {
                 switch (arg.kind) {
                     .flag => {
-                        // See handleShortCluster for rationale on flag idempotency.
                         if (inline_value) |val| {
                             if (diagnostic) |d| d.* = .{ .arg_name = arg.name, .flag_name = long_name, .provided_value = val };
                             return ParseError.InvalidValue;
                         }
+                        // See handleShortCluster for rationale on flag idempotency.
                         @field(result, arg.name) = true;
                         return;
                     },

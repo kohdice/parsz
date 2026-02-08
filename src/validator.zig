@@ -146,9 +146,12 @@ fn validateField(
 }
 
 /// Convert a runtime string value to its typed form.
-/// Returns ParseError.InvalidValue on parse failure.
+/// Returns ParseError.InvalidValue on parse failure, or
+/// ParseError.ValueOutOfRange when an integer exceeds the i64 range.
 /// T is constrained to {[]const u8, i64, f64, bool} by valueTypeToZigType,
 /// making the trailing @compileError unreachable in practice.
+///
+/// For i64: only base-10 decimal notation is accepted (no hex, octal, or binary prefixes).
 ///
 /// For f64: hex float literals (0x...) and non-finite values (nan, inf) are
 /// rejected — CLI arguments should use decimal notation only.
