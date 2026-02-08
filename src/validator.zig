@@ -153,6 +153,9 @@ fn validateField(
 /// T is constrained to {[]const u8, i64, f64, bool} by valueTypeToZigType,
 /// making the trailing @compileError unreachable in practice.
 ///
+/// For f64: hex float literals (0x...) and non-finite values (nan, inf) are
+/// rejected — CLI arguments should use decimal notation only.
+///
 /// Note: For string type, an empty string (e.g., --output=) is accepted as-is.
 /// This is intentional — an empty string is a valid string value.
 fn convertValue(comptime T: type, str: []const u8) ParseError!T {
@@ -162,8 +165,7 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
         // Reject hex float literals (0x1.fp10, -0xFF, etc.) — CLI arguments
         // should use decimal notation only. std.fmt.parseFloat accepts hex
         // floats per IEEE 754, but that format is not user-friendly for CLI input.
-        const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
-        if (s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
+        if (definitions.isHexFloat(str)) {
             return ParseError.InvalidValue;
         }
         const val = std.fmt.parseFloat(f64, str) catch return ParseError.InvalidValue;
@@ -191,8 +193,7 @@ fn convertDefault(
         // validateDefault() should already catch these, but guard here too
         // in case the two functions drift apart.
         comptime {
-            const s = if (def.len > 0 and (def[0] == '+' or def[0] == '-')) def[1..] else def;
-            if (s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X'))
+            if (definitions.isHexFloat(def))
                 @compileError("convertDefault: '" ++ def ++ "' uses hex float notation (invariant violation: validateDefault should have caught this)");
         }
         const val = comptime std.fmt.parseFloat(f64, def) catch
@@ -763,4 +764,32 @@ test "validator: i64 boundary values" {
         var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
         try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
     }
+}
+
+test "validator: multiple boolean option" {
+    const cmd = Command{
+        .name = "mb",
+        .args = &.{
+            .{ .name = "flags", .kind = .option, .value_type = .boolean, .long = "flag", .multiple = true },
+        },
+    };
+    var tok = Tokenizer{ .args = &.{ "--flag=true", "--flag=false", "--flag=1" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, cmd, &raw, null);
+    defer deinitResult(cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 3), result.flags.len);
+    try testing.expectEqual(true, result.flags[0]);
+    try testing.expectEqual(false, result.flags[1]);
+    try testing.expectEqual(true, result.flags[2]);
+}
+
+test "validator: integer with leading zeros is accepted" {
+    // std.fmt.parseInt accepts leading zeros (007 → 7)
+    var tok = Tokenizer{ .args = &.{"--num=007"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+    const result = try validate(testing.allocator, int_cmd, &raw, null);
+    try testing.expectEqual(@as(i64, 7), result.num);
 }
