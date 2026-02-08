@@ -26,7 +26,7 @@ pub const ParseResult = validator.ParseResult;
 /// Parse command-line arguments through the 3-stage pipeline.
 ///
 /// `argv` should NOT include the program name (argv[0]).
-/// Callers typically pass `args[1..]` from `std.process.argsAlloc()`.
+/// Callers typically pass `args[1..]` from `std.process.argsAlloc(allocator)`.
 ///
 /// The Command definition is validated at compile time. At runtime:
 ///   1. Tokenizer classifies each argv element (zero allocation)
@@ -570,6 +570,31 @@ test "integration: positional with default value" {
     try testing.expectEqualStrings("normal", result.mode);
 }
 
+test "integration: required positional + optional positional with default" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "input", .kind = .positional, .required = true },
+            .{ .name = "format", .kind = .positional, .default = "json" },
+        },
+    };
+
+    // Only required positional provided → optional gets default
+    {
+        const argv: []const [:0]const u8 = &.{"data.csv"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqualStrings("data.csv", result.input);
+        try testing.expectEqualStrings("json", result.format);
+    }
+    // Both positionals provided
+    {
+        const argv: []const [:0]const u8 = &.{ "data.csv", "xml" };
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqualStrings("data.csv", result.input);
+        try testing.expectEqualStrings("xml", result.format);
+    }
+}
+
 test "integration: command with no args, empty argv succeeds" {
     const cmd = Command{
         .name = "noop",
@@ -605,6 +630,22 @@ test "integration: command with no args, unexpected positional" {
     try testing.expectError(ParseError.TooManyPositionals, parse(testing.allocator, argv, cmd, null));
 }
 
+test "integration: diagnostic on TooManyPositionals with zero positional defs" {
+    const cmd = Command{
+        .name = "noop",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{"unexpected"};
+    try testing.expectError(ParseError.TooManyPositionals, parse(testing.allocator, argv, cmd, &diagnostic));
+    // No positional args defined → arg_name should be empty
+    try testing.expectEqualStrings("", diagnostic.arg_name);
+    try testing.expectEqualStrings("unexpected", diagnostic.provided_value);
+}
+
 // --- OutOfMemory safety tests ---
 //
 // These tests use FailingAllocator to verify that every allocation failure
@@ -634,6 +675,8 @@ test "integration: OutOfMemory does not leak (multiple string positional)" {
         deinit(cmd, &result, alloc);
         break;
     }
+    // Sentinel: ensure at least one iteration succeeded before reaching the limit.
+    try testing.expect(fail_index < 100);
 }
 
 test "integration: OutOfMemory does not leak (multiple integer option)" {
@@ -658,6 +701,8 @@ test "integration: OutOfMemory does not leak (multiple integer option)" {
         deinit(cmd, &result, alloc);
         break;
     }
+    // Sentinel: ensure at least one iteration succeeded before reaching the limit.
+    try testing.expect(fail_index < 100);
 }
 
 test "integration: OutOfMemory does not leak (two multiple fields, partial success)" {
@@ -683,4 +728,58 @@ test "integration: OutOfMemory does not leak (two multiple fields, partial succe
         deinit(cmd, &result, alloc);
         break;
     }
+    // Sentinel: ensure at least one iteration succeeded before reaching the limit.
+    try testing.expect(fail_index < 100);
+}
+
+test "integration: OutOfMemory does not leak (multiple float option)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "--ratio=1.5", "--ratio=2.0", "--ratio=3.14" };
+
+    var fail_index: usize = 0;
+    while (fail_index < 100) : (fail_index += 1) {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        const alloc = failing.allocator();
+
+        var result = parse(alloc, argv, cmd, null) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        deinit(cmd, &result, alloc);
+        break;
+    }
+    try testing.expect(fail_index < 100);
+}
+
+test "integration: OutOfMemory does not leak (mixed multiple + required non-multiple)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "output", .kind = .option, .long = "output", .required = true },
+            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+            .{ .name = "files", .kind = .positional, .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "--output", "out.txt", "--num=1", "--num=2", "a.txt", "b.txt" };
+
+    var fail_index: usize = 0;
+    while (fail_index < 100) : (fail_index += 1) {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        const alloc = failing.allocator();
+
+        var result = parse(alloc, argv, cmd, null) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        deinit(cmd, &result, alloc);
+        break;
+    }
+    try testing.expect(fail_index < 100);
 }
