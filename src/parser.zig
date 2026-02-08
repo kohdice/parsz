@@ -77,16 +77,16 @@ pub fn parseTokens(
     var result: RawResult(cmd) = .{};
     errdefer deinitRawResult(cmd, &result, allocator);
 
-    // Pre-collect positional arg names so handlePositional can map
-    // positional_index to the correct field via inline for.
-    const positional_names = comptime blk: {
-        var names: []const []const u8 = &.{};
+    // Pre-collect positional Arg definitions so handlePositional can map
+    // positional_index to the correct Arg directly via inline for.
+    const positional_args = comptime blk: {
+        var args: []const Arg = &.{};
         for (cmd.args) |arg| {
             if (arg.kind == .positional) {
-                names = names ++ .{arg.name};
+                args = args ++ .{arg};
             }
         }
-        break :blk names;
+        break :blk args;
     };
 
     var positional_index: usize = 0;
@@ -104,7 +104,7 @@ pub fn parseTokens(
                     cmd,
                     &result,
                     allocator,
-                    positional_names,
+                    positional_args,
                     &positional_index,
                     value,
                     diagnostic,
@@ -212,18 +212,17 @@ fn handlePositional(
     comptime cmd: Command,
     result: *RawResult(cmd),
     allocator: std.mem.Allocator,
-    comptime positional_names: []const []const u8,
+    comptime positional_args: []const Arg,
     positional_index: *usize,
     value: []const u8,
     diagnostic: ?*Diagnostic,
 ) (ParseError || error{OutOfMemory})!void {
-    inline for (positional_names, 0..) |pname, pidx| {
+    inline for (positional_args, 0..) |arg, pidx| {
         if (positional_index.* == pidx) {
-            const arg = comptime argByName(cmd, pname);
             if (arg.multiple) {
-                try @field(result, pname).append(allocator, value);
+                try @field(result, arg.name).append(allocator, value);
             } else {
-                @field(result, pname) = value;
+                @field(result, arg.name) = value;
                 positional_index.* = pidx + 1;
             }
             return;
@@ -231,7 +230,7 @@ fn handlePositional(
     }
 
     if (diagnostic) |d| d.* = .{
-        .arg_name = if (positional_names.len > 0) positional_names[positional_names.len - 1] else "",
+        .arg_name = if (positional_args.len > 0) positional_args[positional_args.len - 1].name else "",
         .provided_value = value,
     };
     return ParseError.TooManyPositionals;
@@ -255,16 +254,6 @@ fn assignValue(
         }
         @field(result, arg.name) = value;
     }
-}
-
-/// Look up an Arg by name within a Command definition.
-/// Called only with names from the comptime-computed positional_names slice,
-/// which is derived from cmd.args, so the lookup always succeeds.
-fn argByName(comptime cmd: Command, comptime name: []const u8) Arg {
-    for (cmd.args) |arg| {
-        if (std.mem.eql(u8, arg.name, name)) return arg;
-    }
-    @compileError("argByName: no Arg with name '" ++ name ++ "' in Command '" ++ cmd.name ++ "'");
 }
 
 /// Free any ArrayListUnmanaged backing arrays in a RawResult.
