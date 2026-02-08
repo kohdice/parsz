@@ -629,3 +629,67 @@ test "validator: diagnostic on missing required includes flag_name" {
     try testing.expectEqualStrings("count", diagnostic.arg_name);
     try testing.expectEqualStrings("count", diagnostic.flag_name);
 }
+
+test "validator: diagnostic on missing required single positional" {
+    const cmd = Command{
+        .name = "pos",
+        .args = &.{
+            .{ .name = "file", .kind = .positional, .required = true },
+        },
+    };
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.MissingRequired, validate(testing.allocator, cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("file", diagnostic.arg_name);
+    try testing.expectEqualStrings("", diagnostic.flag_name);
+}
+
+test "validator: parseBool case-insensitive acceptance" {
+    // "FALSE" (uppercase) should be accepted as false
+    const cmd = Command{
+        .name = "booltest",
+        .args = &.{
+            .{ .name = "flag", .kind = .option, .value_type = .boolean, .long = "flag", .required = true },
+        },
+    };
+    var tok = Tokenizer{ .args = &.{"--flag=FALSE"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    const result = try validate(testing.allocator, cmd, &raw, null);
+    try testing.expectEqual(false, result.flag);
+}
+
+test "validator: parseBool rejects invalid strings" {
+    const cmd = Command{
+        .name = "booltest",
+        .args = &.{
+            .{ .name = "flag", .kind = .option, .value_type = .boolean, .long = "flag", .required = true },
+        },
+    };
+
+    // "2" is not a valid boolean
+    {
+        var tok = Tokenizer{ .args = &.{"--flag=2"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+        defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, cmd, &raw, null));
+    }
+    // "yes" is not a valid boolean
+    {
+        var tok = Tokenizer{ .args = &.{"--flag=yes"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+        defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, cmd, &raw, null));
+    }
+    // "no" is not a valid boolean
+    {
+        var tok = Tokenizer{ .args = &.{"--flag=no"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+        defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, cmd, &raw, null));
+    }
+}

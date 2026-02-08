@@ -528,3 +528,35 @@ test "parser: diagnostic on too many positionals includes arg_name" {
     try testing.expectEqualStrings("input", diagnostic.arg_name);
     try testing.expectEqualStrings("b", diagnostic.provided_value);
 }
+
+test "parser: errdefer frees multiple field on subsequent error" {
+    const cmd = Command{
+        .name = "errd",
+        .args = &.{
+            .{ .name = "files", .kind = .positional, .multiple = true },
+        },
+    };
+    var tok = Tokenizer{ .args = &.{ "a.txt", "b.txt", "-x" } };
+    // -x is an unknown flag → UnknownFlag error.
+    // The multiple field "files" must be freed by errdefer without leaking.
+    // testing.allocator detects leaks, so this test passing proves cleanup works.
+    try testing.expectError(ParseError.UnknownFlag, parseTokens(testing.allocator, &tok, cmd, null));
+}
+
+test "parser: unknown char in middle of short cluster" {
+    var diagnostic: Diagnostic = .{};
+    // -v is valid flag, x is unknown → UnknownFlag with diagnostic.flag_name = "x"
+    var tok = Tokenizer{ .args = &.{"-vx"} };
+    try testing.expectError(ParseError.UnknownFlag, parseTokens(testing.allocator, &tok, test_cmd, &diagnostic));
+    try testing.expectEqualStrings("x", diagnostic.flag_name);
+}
+
+test "parser: multiple option long with separate values" {
+    var tok = Tokenizer{ .args = &.{ "--include", "a", "--include", "b" } };
+    var result = try parseTokens(testing.allocator, &tok, multi_option_cmd, null);
+    defer deinitRawResult(multi_option_cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), result.include.items.len);
+    try testing.expectEqualStrings("a", result.include.items[0]);
+    try testing.expectEqualStrings("b", result.include.items[1]);
+}

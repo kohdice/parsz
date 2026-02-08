@@ -518,3 +518,70 @@ test "integration: diagnostic on multiple option InvalidValue includes flag_name
     try testing.expectEqualStrings("num", diagnostic.flag_name);
     try testing.expectEqualStrings("abc", diagnostic.provided_value);
 }
+
+test "integration: option value that looks like a flag" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "output", .kind = .option, .long = "output", .required = true },
+        },
+    };
+
+    // "--verbose" is consumed as the value for --output (not as a separate flag)
+    const argv: []const [:0]const u8 = &.{ "--output", "--verbose" };
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqualStrings("--verbose", result.output);
+}
+
+test "integration: single positional followed by multiple positional" {
+    const cmd = Command{
+        .name = "cp",
+        .args = &.{
+            .{ .name = "source", .kind = .positional, .required = true },
+            .{ .name = "targets", .kind = .positional, .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "src.txt", "dst1.txt", "dst2.txt" };
+    var result = try parse(testing.allocator, argv, cmd, null);
+    defer deinit(cmd, &result, testing.allocator);
+
+    try testing.expectEqualStrings("src.txt", result.source);
+    try testing.expectEqual(@as(usize, 2), result.targets.len);
+    try testing.expectEqualStrings("dst1.txt", result.targets[0]);
+    try testing.expectEqualStrings("dst2.txt", result.targets[1]);
+}
+
+test "integration: positional with default value" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "mode", .kind = .positional, .default = "normal" },
+        },
+    };
+
+    // Empty argv → default "normal" applied
+    const argv: []const [:0]const u8 = &.{};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqualStrings("normal", result.mode);
+}
+
+test "integration: command with no args, empty argv succeeds" {
+    const cmd = Command{
+        .name = "noop",
+        .args = &.{},
+    };
+
+    const argv: []const [:0]const u8 = &.{};
+    _ = try parse(testing.allocator, argv, cmd, null);
+}
+
+test "integration: command with no args, unexpected positional" {
+    const cmd = Command{
+        .name = "noop",
+        .args = &.{},
+    };
+
+    const argv: []const [:0]const u8 = &.{"unexpected"};
+    try testing.expectError(ParseError.TooManyPositionals, parse(testing.allocator, argv, cmd, null));
+}

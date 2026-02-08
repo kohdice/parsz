@@ -235,3 +235,16 @@ test "long: '--=' treated as positional" {
     const t = tok.next().?;
     try std.testing.expectEqualStrings("--=", t.positional);
 }
+
+test "second '--' after end_of_options is treated as positional" {
+    var tok = Tokenizer{ .args = &.{ "--", "--" } };
+    {
+        const t = tok.next().?;
+        try std.testing.expect(t == .end_of_options);
+    }
+    {
+        const t = tok.next().?;
+        try std.testing.expectEqualStrings("--", t.positional);
+    }
+    try std.testing.expectEqual(null, tok.next());
+}
