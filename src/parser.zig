@@ -2,7 +2,8 @@
 //!
 //! Uses comptime Command definitions as a "symbol table" to resolve
 //! ambiguities (e.g., is `-o file` an option with value, or a flag + positional?).
-//! Generates RawResult — a comptime struct whose fields are bool (flags) or string-based (options/positionals).
+//! Generates RawResult — a comptime struct whose fields are bool (flags),
+//! ?[]const u8 (single options/positionals), or ArrayListUnmanaged (multiple).
 
 const std = @import("std");
 const definitions = @import("definitions.zig");
@@ -130,6 +131,9 @@ fn handleShortCluster(
                             // simply sets the bool to true again.
                             @field(result, arg.name) = true;
                         },
+                        // .positional is unreachable here (comptime validation forbids
+                        // positionals from having short), but sharing the branch with
+                        // .option avoids a redundant `else => unreachable`.
                         .option, .positional => {
                             const value: []const u8 = if (i + 1 < cluster.len)
                                 cluster[i + 1 ..]
@@ -177,6 +181,9 @@ fn handleLong(
                         @field(result, arg.name) = true;
                         return;
                     },
+                    // .positional is unreachable here (comptime validation forbids
+                    // positionals from having long), but sharing the branch with
+                    // .option avoids a redundant `else => unreachable`.
                     .option, .positional => {
                         const value = inline_value orelse
                             tok.nextRaw() orelse {

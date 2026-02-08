@@ -2,8 +2,11 @@
 ///
 /// All slices are non-owning references to either argv memory or comptime
 /// string literals, so no allocation or deallocation is needed.
-/// Lifetime: fields referencing argv are valid only while the argv slice is alive.
-/// Fields referencing comptime literals (arg_name, flag_name for definitions) have static lifetime.
+/// Lifetime (per field):
+/// - arg_name: always a comptime literal (static lifetime).
+/// - flag_name: comptime literal (static) for known args; argv slice
+///   (argv lifetime) for unknown flags.
+/// - provided_value: always an argv slice when non-empty (argv lifetime).
 ///
 /// When `null` is passed as the diagnostic parameter, error reporting is
 /// skipped with zero overhead — no fields are populated.
@@ -33,8 +36,11 @@ pub const Diagnostic = struct {
     /// The Arg.name from the command definition that caused the error.
     /// Empty if the error is for an unknown flag (no matching definition).
     arg_name: []const u8 = "",
-    /// The flag name from the command line (e.g., "verbose" for --verbose).
-    /// For short flags, a single-character slice from the cluster.
+    /// The flag/option name relevant to the error.
+    /// For unknown flags: a slice from the argv element (argv lifetime).
+    /// For known flags/options: from the comptime definition (static lifetime).
+    /// For short-only options, a single character (e.g., "o" for -o).
+    /// For positionals: empty string.
     flag_name: []const u8 = "",
     /// The value string that caused the error (e.g., "abc" for --count=abc).
     provided_value: []const u8 = "",

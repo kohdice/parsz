@@ -236,7 +236,7 @@ pub fn deinitResult(
             const slice = @field(result, arg.name);
             // Guard: We skip free for zero-length slices because:
             // 1. &.{} (comptime empty literal used for initialization) is NOT heap-allocated
-            // 2. allocator.alloc(T, 0) returns a non-heap slice per Zig spec
+            // 2. allocator.alloc(T, 0) returns a non-heap slice per standard library allocator convention
             // 3. toOwnedSlice on an empty ArrayList returns a non-heap slice
             // Passing any of these to allocator.free() is invalid (safety-checked illegal behavior).
             if (slice.len > 0) {

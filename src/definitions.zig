@@ -62,6 +62,9 @@ pub const Command = struct {
     args: []const Arg = &.{},
 };
 
+/// Validate a single Arg definition at comptime.
+/// Called automatically during RawResult/ParseResult generation;
+/// can also be called directly for early validation.
 pub fn validateArg(comptime arg: Arg) void {
     validateIdent(arg.name);
     validateKindRules(arg);
@@ -70,6 +73,9 @@ pub fn validateArg(comptime arg: Arg) void {
     validateDefault(arg);
 }
 
+/// Validate a Command definition and all its Args at comptime.
+/// Called automatically during RawResult/ParseResult generation;
+/// can also be called directly for early validation.
 pub fn validateCommand(comptime cmd: Command) void {
     if (cmd.name.len == 0) {
         @compileError("Invalid Command definition: name cannot be empty");
