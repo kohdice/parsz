@@ -35,9 +35,9 @@ pub const ValueType = enum {
 /// - multiple and default cannot both be set
 pub const Arg = struct {
     /// Field name for ParseResult (required).
-    /// Must follow Zig identifier rules: [a-zA-Z_][a-zA-Z0-9_]*
+    /// Must match the Zig identifier character pattern: [a-zA-Z_][a-zA-Z0-9_]*
     ///
-    /// Zig keywords (e.g., "type", "error") are allowed. When a keyword is used,
+    /// Zig keywords (e.g., "type", "error") are also accepted. When a keyword is used,
     /// access the result field via `result.@"type"` or `@field(result, "type")`.
     name: []const u8,
     kind: ArgKind,
