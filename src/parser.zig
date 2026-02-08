@@ -131,10 +131,11 @@ fn handleShortCluster(
                             // simply sets the bool to true again.
                             @field(result, arg.name) = true;
                         },
-                        // .positional is unreachable here (comptime validation forbids
-                        // positionals from having short), but sharing the branch with
-                        // .option avoids a redundant `else => unreachable`.
                         .option, .positional => {
+                            // .positional is unreachable here: comptime validation
+                            // (validateKindRules) forbids positionals from having
+                            // short names. Sharing the branch avoids `else => unreachable`.
+                            comptime std.debug.assert(arg.kind == .option);
                             const value: []const u8 = if (i + 1 < cluster.len)
                                 cluster[i + 1 ..]
                             else
@@ -181,10 +182,11 @@ fn handleLong(
                         @field(result, arg.name) = true;
                         return;
                     },
-                    // .positional is unreachable here (comptime validation forbids
-                    // positionals from having long), but sharing the branch with
-                    // .option avoids a redundant `else => unreachable`.
                     .option, .positional => {
+                        // .positional is unreachable here: comptime validation
+                        // (validateKindRules) forbids positionals from having
+                        // long names. Sharing the branch avoids `else => unreachable`.
+                        comptime std.debug.assert(arg.kind == .option);
                         const value = inline_value orelse
                             tok.nextRaw() orelse {
                             if (diagnostic) |d| d.* = .{ .arg_name = arg.name, .flag_name = long_name };
