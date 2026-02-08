@@ -23,10 +23,12 @@
 /// | MissingValue      | x        | x         |                |
 /// | MissingRequired   | x        | x (*)     |                |
 /// | InvalidValue      | x        | x (*)     | x              |
-/// | TooManyPositionals| x        |           | x              |
+/// | TooManyPositionals| x (**)   |           | x              |
 /// | DuplicateArg      | x        | x         | x              |
 ///
 /// (*) flag_name is set for option/flag kinds; empty for positionals.
+/// (**) arg_name is set to the last positional arg's name when positional
+///      definitions exist; empty when the command has no positional definitions.
 ///
 /// Usage:
 /// ```
@@ -37,7 +39,8 @@
 /// ```
 pub const Diagnostic = struct {
     /// The Arg.name from the command definition that caused the error.
-    /// Empty if the error is for an unknown flag (no matching definition).
+    /// Empty if the error is for an unknown flag (no matching definition)
+    /// or for TooManyPositionals when no positional arguments are defined.
     arg_name: []const u8 = "",
     /// The flag/option name relevant to the error.
     /// For unknown flags: a slice from the argv element (argv lifetime).
