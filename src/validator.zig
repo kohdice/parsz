@@ -55,6 +55,11 @@ fn ParseFieldType(comptime arg: Arg) type {
     };
 }
 
+/// Semantic analysis: convert RawResult (all-string) to ParseResult (typed).
+///
+/// Applies type conversion, required checks, and defaults. Allocates
+/// only for `multiple` fields. On error, all partially-built slices
+/// are freed via errdefer before returning.
 pub fn validate(
     allocator: std.mem.Allocator,
     comptime cmd: Command,
@@ -244,6 +249,11 @@ fn validateMultipleField(
     return result;
 }
 
+/// Free any heap-allocated `multiple` field slices in a ParseResult.
+///
+/// Safe to call even when no `multiple` fields exist (no-op). After
+/// deinit, the result struct is poisoned to `undefined` to catch
+/// use-after-free in Debug/ReleaseSafe builds.
 pub fn deinitResult(
     comptime cmd: Command,
     result: *ParseResult(cmd),
