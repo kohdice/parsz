@@ -226,9 +226,9 @@ fn validateMultipleField(
     if (T == []const u8) {
         // Ownership transfer: toOwnedSlice() moves the backing array from
         // the RawResult's ArrayListUnmanaged into the returned slice.
-        // After this call, the raw list is reset to empty (capacity=0,
-        // items.len=0), so deinitRawResult() calling .deinit() on it
-        // will be a no-op — preventing double-free.
+        // Success: raw list is reset to empty → deinitRawResult() is no-op.
+        // Failure (OOM): raw list retains its backing buffer →
+        //   deinitRawResult() frees it; result field stays &.{} (pre-initialized).
         return try raw_list.toOwnedSlice(allocator);
     }
 
