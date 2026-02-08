@@ -604,3 +604,83 @@ test "integration: command with no args, unexpected positional" {
     const argv: []const [:0]const u8 = &.{"unexpected"};
     try testing.expectError(ParseError.TooManyPositionals, parse(testing.allocator, argv, cmd, null));
 }
+
+// --- OutOfMemory safety tests ---
+//
+// These tests use FailingAllocator to verify that every allocation failure
+// point in the pipeline is handled without leaking memory. The pattern:
+// try each fail_index from 0 upward; on OOM verify no leak via the backing
+// testing.allocator (GPA); on success, clean up and break.
+
+test "integration: OutOfMemory does not leak (multiple string positional)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "files", .kind = .positional, .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "a.txt", "b.txt", "c.txt" };
+
+    var fail_index: usize = 0;
+    while (fail_index < 100) : (fail_index += 1) {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        const alloc = failing.allocator();
+
+        var result = parse(alloc, argv, cmd, null) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        deinit(cmd, &result, alloc);
+        break;
+    }
+}
+
+test "integration: OutOfMemory does not leak (multiple integer option)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "--num=1", "--num=2", "--num=3" };
+
+    var fail_index: usize = 0;
+    while (fail_index < 100) : (fail_index += 1) {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        const alloc = failing.allocator();
+
+        var result = parse(alloc, argv, cmd, null) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        deinit(cmd, &result, alloc);
+        break;
+    }
+}
+
+test "integration: OutOfMemory does not leak (two multiple fields, partial success)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+            .{ .name = "files", .kind = .positional, .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "--num=1", "--num=2", "a.txt", "b.txt" };
+
+    var fail_index: usize = 0;
+    while (fail_index < 100) : (fail_index += 1) {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        const alloc = failing.allocator();
+
+        var result = parse(alloc, argv, cmd, null) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            continue;
+        };
+        deinit(cmd, &result, alloc);
+        break;
+    }
+}
