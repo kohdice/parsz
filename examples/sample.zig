@@ -42,7 +42,7 @@ const cmd = parsz.Command{
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer if (gpa.deinit() == .leak) @panic("memory leak detected");
     const allocator = gpa.allocator();
 
     const args = try std.process.argsAlloc(allocator);
@@ -52,19 +52,22 @@ pub fn main() !void {
     const argv: []const [:0]const u8 = if (args.len > 0) args[1..] else args[0..0];
 
     var diagnostic: parsz.Diagnostic = .{};
-    var result = parsz.parse(allocator, argv, cmd, &diagnostic) catch |err| {
-        if (diagnostic.arg_name.len > 0) {
-            std.debug.print("Error: argument '{s}': {s}", .{ diagnostic.arg_name, @errorName(err) });
-            if (diagnostic.provided_value.len > 0) {
-                std.debug.print(" (got '{s}')", .{diagnostic.provided_value});
+    var result = parsz.parse(allocator, argv, cmd, &diagnostic) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            if (diagnostic.arg_name.len > 0) {
+                std.debug.print("Error: argument '{s}': {s}", .{ diagnostic.arg_name, @errorName(err) });
+                if (diagnostic.provided_value.len > 0) {
+                    std.debug.print(" (got '{s}')", .{diagnostic.provided_value});
+                }
+                std.debug.print("\n", .{});
+            } else if (diagnostic.flag_name.len > 0) {
+                std.debug.print("Error: unknown flag '{s}'\n", .{diagnostic.flag_name});
+            } else {
+                std.debug.print("Parse error: {s}\n", .{@errorName(err)});
             }
-            std.debug.print("\n", .{});
-        } else if (diagnostic.flag_name.len > 0) {
-            std.debug.print("Error: unknown flag '{s}'\n", .{diagnostic.flag_name});
-        } else {
-            std.debug.print("Parse error: {s}\n", .{@errorName(err)});
-        }
-        std.process.exit(1);
+            std.process.exit(1);
+        },
     };
     defer parsz.deinit(cmd, &result, allocator);
 
