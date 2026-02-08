@@ -493,6 +493,19 @@ test "integration: short-only option with inline value" {
     try testing.expectEqual(@as(i64, 42), result.num);
 }
 
+test "integration: short option with inline negative integer value" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"-n-10"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqual(@as(i64, -10), result.num);
+}
+
 test "integration: diagnostic on required multiple missing" {
     const cmd = Command{
         .name = "app",

@@ -884,3 +884,42 @@ test "validator: multiple boolean positional" {
     try testing.expectEqual(true, result.flags[2]);
     try testing.expectEqual(false, result.flags[3]);
 }
+
+test "validator: diagnostic on ValueOutOfRange includes all fields" {
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{"--num=99999999999999999999"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, int_cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("num", diagnostic.arg_name);
+    try testing.expectEqualStrings("num", diagnostic.flag_name);
+    try testing.expectEqualStrings("99999999999999999999", diagnostic.provided_value);
+}
+
+test "validator: multiple integer ValueOutOfRange" {
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{ "--num=1", "--num=99999999999999999999" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, multi_int_cmd, null);
+    defer parser.deinitRawResult(multi_int_cmd, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, multi_int_cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("nums", diagnostic.arg_name);
+    try testing.expectEqualStrings("num", diagnostic.flag_name);
+    try testing.expectEqualStrings("99999999999999999999", diagnostic.provided_value);
+}
+
+test "validator: diagnostic on MissingRequired for short-only option" {
+    const short_only_req_cmd = Command{
+        .name = "sor",
+        .args = &.{
+            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+        },
+    };
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, short_only_req_cmd, null);
+    defer parser.deinitRawResult(short_only_req_cmd, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.MissingRequired, validate(testing.allocator, short_only_req_cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("num", diagnostic.arg_name);
+    try testing.expectEqualStrings("n", diagnostic.flag_name);
+}
