@@ -77,18 +77,6 @@ pub fn parseTokens(
     var result: RawResult(cmd) = .{};
     errdefer deinitRawResult(cmd, &result, allocator);
 
-    // Pre-collect positional Arg definitions so handlePositional can map
-    // positional_index to the correct Arg directly via inline for.
-    const positional_args = comptime blk: {
-        var args: []const Arg = &.{};
-        for (cmd.args) |arg| {
-            if (arg.kind == .positional) {
-                args = args ++ .{arg};
-            }
-        }
-        break :blk args;
-    };
-
     var positional_index: usize = 0;
 
     while (tok.next()) |token| {
@@ -104,7 +92,6 @@ pub fn parseTokens(
                     cmd,
                     &result,
                     allocator,
-                    positional_args,
                     &positional_index,
                     value,
                     diagnostic,
@@ -212,11 +199,20 @@ fn handlePositional(
     comptime cmd: Command,
     result: *RawResult(cmd),
     allocator: std.mem.Allocator,
-    comptime positional_args: []const Arg,
     positional_index: *usize,
     value: []const u8,
     diagnostic: ?*Diagnostic,
 ) (ParseError || error{OutOfMemory})!void {
+    const positional_args = comptime blk: {
+        var args: []const Arg = &.{};
+        for (cmd.args) |arg| {
+            if (arg.kind == .positional) {
+                args = args ++ .{arg};
+            }
+        }
+        break :blk args;
+    };
+
     inline for (positional_args, 0..) |arg, pidx| {
         if (positional_index.* == pidx) {
             if (arg.multiple) {

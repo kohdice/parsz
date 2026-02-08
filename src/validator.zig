@@ -86,11 +86,9 @@ pub fn validate(
     inline for (cmd.args) |arg| {
         if (arg.multiple) {
             @field(&result, arg.name) = try validateMultipleField(
-                definitions.valueTypeToZigType(arg.value_type),
+                arg,
                 allocator,
                 &@field(raw, arg.name),
-                arg.name,
-                comptime flagDisplayName(arg),
                 diagnostic,
             );
             if (arg.required and @field(&result, arg.name).len == 0) {
@@ -158,7 +156,7 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
     if (T == i64) return std.fmt.parseInt(i64, str, 10) catch return ParseError.InvalidValue;
     if (T == f64) {
         const val = std.fmt.parseFloat(f64, str) catch return ParseError.InvalidValue;
-        if (std.math.isNan(val) or std.math.isInf(val)) return ParseError.InvalidValue;
+        if (!std.math.isFinite(val)) return ParseError.InvalidValue;
         return val;
     }
     if (T == bool) return definitions.parseBool(str) catch return ParseError.InvalidValue;
@@ -194,13 +192,12 @@ fn flagDisplayName(comptime arg: Arg) []const u8 {
 }
 
 fn validateMultipleField(
-    comptime T: type,
+    comptime arg: Arg,
     allocator: std.mem.Allocator,
     raw_list: *std.ArrayListUnmanaged([]const u8),
-    comptime arg_name: []const u8,
-    comptime flag_name: []const u8,
     diagnostic: ?*Diagnostic,
-) (ParseError || error{OutOfMemory})![]const T {
+) (ParseError || error{OutOfMemory})![]const definitions.valueTypeToZigType(arg.value_type) {
+    const T = definitions.valueTypeToZigType(arg.value_type);
     if (T == []const u8) {
         // Ownership transfer: toOwnedSlice() moves the backing array from
         // the RawResult's ArrayListUnmanaged into the returned slice.
@@ -216,7 +213,11 @@ fn validateMultipleField(
 
     for (items, 0..) |str, i| {
         result[i] = convertValue(T, str) catch |err| {
-            if (diagnostic) |d| d.* = .{ .arg_name = arg_name, .flag_name = flag_name, .provided_value = str };
+            if (diagnostic) |d| d.* = .{
+                .arg_name = arg.name,
+                .flag_name = comptime flagDisplayName(arg),
+                .provided_value = str,
+            };
             return err;
         };
     }

@@ -218,7 +218,7 @@ fn validateDefault(comptime arg: Arg) void {
             const val = std.fmt.parseFloat(f64, def) catch {
                 compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
             };
-            if (std.math.isNan(val) or std.math.isInf(val)) {
+            if (!std.math.isFinite(val)) {
                 compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
             }
         },
