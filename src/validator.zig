@@ -162,15 +162,19 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
 /// Comptime counterpart of convertValue — converts a default value string
 /// to its typed form at comptime.
 /// Safety: validateDefault() has already verified the string is valid for
-/// the target type, so parse failures are unreachable.
+/// the target type. If that invariant ever breaks, @compileError produces
+/// a clear message instead of a cryptic "reached unreachable" error.
 fn convertDefault(
     comptime T: type,
     comptime def: []const u8,
 ) T {
     if (T == []const u8) return def;
-    if (T == i64) return comptime std.fmt.parseInt(i64, def, 10) catch unreachable;
-    if (T == f64) return comptime std.fmt.parseFloat(f64, def) catch unreachable;
-    if (T == bool) return comptime definitions.parseBool(def) catch unreachable;
+    if (T == i64) return comptime std.fmt.parseInt(i64, def, 10) catch
+        @compileError("convertDefault: '" ++ def ++ "' is not a valid i64 (invariant violation: validateDefault should have caught this)");
+    if (T == f64) return comptime std.fmt.parseFloat(f64, def) catch
+        @compileError("convertDefault: '" ++ def ++ "' is not a valid f64 (invariant violation: validateDefault should have caught this)");
+    if (T == bool) return comptime definitions.parseBool(def) catch
+        @compileError("convertDefault: '" ++ def ++ "' is not a valid bool (invariant violation: validateDefault should have caught this)");
     @compileError("convertDefault: unsupported type " ++ @typeName(T));
 }
 
@@ -178,7 +182,9 @@ fn convertDefault(
 /// For options: returns the long name if available, otherwise the short character.
 /// For positionals: returns an empty string (no flag form).
 fn flagDisplayName(comptime arg: Arg) []const u8 {
-    return arg.long orelse if (arg.short) |s| &.{s} else "";
+    if (arg.long) |long| return long;
+    if (arg.short) |s| return &.{s};
+    return "";
 }
 
 fn validateMultipleField(
