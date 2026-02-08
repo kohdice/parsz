@@ -39,7 +39,7 @@ pub const ParseResult = validator.ParseResult;
 /// Call `deinit()` to free any memory allocated for `multiple` arguments.
 ///
 /// Pass a `*Diagnostic` to receive detailed error context on failure, or `null`
-/// to skip diagnostics.
+/// to skip diagnostics. Note: `error.OutOfMemory` does NOT populate Diagnostic fields.
 pub fn parse(
     allocator: std.mem.Allocator,
     argv: []const [:0]const u8,
