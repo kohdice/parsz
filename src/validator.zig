@@ -186,23 +186,21 @@ fn convertDefault(
     comptime def: []const u8,
 ) T {
     if (T == []const u8) return def;
-    if (T == i64) return comptime std.fmt.parseInt(i64, def, 10) catch
+    if (T == i64) return std.fmt.parseInt(i64, def, 10) catch
         @compileError("convertDefault: '" ++ def ++ "' is not a valid i64 (invariant violation: validateDefault should have caught this)");
     if (T == f64) {
         // Defense-in-depth: reject hex float notation and non-finite values.
         // validateDefault() should already catch these, but guard here too
         // in case the two functions drift apart.
-        comptime {
-            if (definitions.isHexFloat(def))
-                @compileError("convertDefault: '" ++ def ++ "' uses hex float notation (invariant violation: validateDefault should have caught this)");
-        }
-        const val = comptime std.fmt.parseFloat(f64, def) catch
+        if (definitions.isHexFloat(def))
+            @compileError("convertDefault: '" ++ def ++ "' uses hex float notation (invariant violation: validateDefault should have caught this)");
+        const val = std.fmt.parseFloat(f64, def) catch
             @compileError("convertDefault: '" ++ def ++ "' is not a valid f64 (invariant violation: validateDefault should have caught this)");
-        if (comptime !std.math.isFinite(val))
+        if (!std.math.isFinite(val))
             @compileError("convertDefault: '" ++ def ++ "' is not a finite f64 (invariant violation: validateDefault should have caught this)");
         return val;
     }
-    if (T == bool) return comptime definitions.parseBool(def) catch
+    if (T == bool) return definitions.parseBool(def) catch
         @compileError("convertDefault: '" ++ def ++ "' is not a valid bool (invariant violation: validateDefault should have caught this)");
     @compileError("convertDefault: unsupported type " ++ @typeName(T));
 }
