@@ -63,8 +63,9 @@ pub fn main() !void {
         error.DuplicateArg,
         => {
             if (diagnostic.flag_name.len > 0 and diagnostic.arg_name.len > 0) {
-                // Known option/flag: show the flag the user typed (e.g., "--count", "-n")
-                std.debug.print("Error: option '{s}': {s}", .{ diagnostic.flag_name, @errorName(err) });
+                // Known option/flag: show the flag name from the definition (e.g., "count", "n")
+                const label = if (err == error.InvalidValue and diagnostic.provided_value.len == 0) "flag" else "option";
+                std.debug.print("Error: {s} '{s}': {s}", .{ label, diagnostic.flag_name, @errorName(err) });
                 if (diagnostic.provided_value.len > 0) {
                     std.debug.print(" (got '{s}')", .{diagnostic.provided_value});
                 }
@@ -80,7 +81,12 @@ pub fn main() !void {
                 // Unknown flag (no arg_name, only flag_name)
                 std.debug.print("Error: unknown flag '{s}'\n", .{diagnostic.flag_name});
             } else {
-                std.debug.print("Parse error: {s}\n", .{@errorName(err)});
+                // Fallback (e.g., TooManyPositionals with no positional definitions)
+                std.debug.print("Parse error: {s}", .{@errorName(err)});
+                if (diagnostic.provided_value.len > 0) {
+                    std.debug.print(" (got '{s}')", .{diagnostic.provided_value});
+                }
+                std.debug.print("\n", .{});
             }
             std.process.exit(1);
         },
