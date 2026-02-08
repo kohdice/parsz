@@ -168,11 +168,15 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
         if (definitions.isHexFloat(str)) {
             return ParseError.InvalidValue;
         }
-        const val = std.fmt.parseFloat(f64, str) catch return ParseError.InvalidValue;
+        const val = std.fmt.parseFloat(f64, str) catch |err| return switch (err) {
+            error.InvalidCharacter => ParseError.InvalidValue,
+        };
         if (!std.math.isFinite(val)) return ParseError.InvalidValue;
         return val;
     }
-    if (T == bool) return definitions.parseBool(str) catch return ParseError.InvalidValue;
+    if (T == bool) return definitions.parseBool(str) catch |err| return switch (err) {
+        error.InvalidBool => ParseError.InvalidValue,
+    };
     @compileError("convertValue: unsupported type " ++ @typeName(T));
 }
 
