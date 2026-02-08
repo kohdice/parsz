@@ -81,8 +81,8 @@ pub fn build(b: *std.Build) void {
         // Default value validation
         .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
         .{ "test/comptime/default_invalid_float.zig", "is not a valid float" },
-        .{ "test/comptime/default_nan_float.zig", "is not a valid float" },
-        .{ "test/comptime/default_inf_float.zig", "is not a valid float" },
+        .{ "test/comptime/default_nan_float.zig", "overflows f64 range" },
+        .{ "test/comptime/default_inf_float.zig", "overflows f64 range" },
         .{ "test/comptime/default_hex_float.zig", "must not use hex float notation" },
         .{ "test/comptime/default_invalid_boolean.zig", "is not a valid boolean" },
 

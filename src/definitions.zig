@@ -65,6 +65,10 @@ pub const Command = struct {
     name: []const u8,
     /// Description of the command. Currently unused; intended for future help/usage message generation.
     about: ?[]const u8 = null,
+    /// Argument definitions for this command.
+    /// Ordering constraint for positionals: required positionals must come before
+    /// optional ones, and at most one `multiple` positional is allowed (must be last).
+    /// Names, short characters, and long names must be unique across all args.
     args: []const Arg = &.{},
 };
 
@@ -132,7 +136,8 @@ pub fn parseBool(value: []const u8) ParseBoolError!bool {
         error.InvalidBool;
 }
 
-/// Check whether a string represents a hex float literal (0x/0X prefix, with optional leading sign).
+/// Check whether a string has a hex float prefix (0x/0X, with optional leading sign).
+/// This is a prefix-only check — it does not validate the full hex float syntax.
 /// Used by comptime validation (validateDefault, convertDefault) and runtime conversion
 /// (convertValue) to reject hex float notation in CLI float arguments.
 pub fn isHexFloat(str: []const u8) bool {
@@ -230,8 +235,9 @@ fn validateDefault(comptime arg: Arg) void {
     const def = arg.default orelse return;
     switch (arg.value_type) {
         .integer => {
-            _ = std.fmt.parseInt(i64, def, 10) catch {
-                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid integer", .{def});
+            _ = std.fmt.parseInt(i64, def, 10) catch |err| switch (err) {
+                error.Overflow => compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' overflows i64 range", .{def}),
+                error.InvalidCharacter => compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid integer", .{def}),
             };
         },
         .float => {
@@ -243,7 +249,7 @@ fn validateDefault(comptime arg: Arg) void {
                 compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
             };
             if (!std.math.isFinite(val)) {
-                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
+                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' overflows f64 range", .{def});
             }
         },
         .boolean => {
