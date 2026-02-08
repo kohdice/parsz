@@ -75,6 +75,7 @@ pub const ParseError = error{
 
     /// A numeric value was syntactically valid but exceeded the target type's range.
     /// Example: --count=99999999999999999999 (exceeds i64 range)
+    /// Example: --ratio=1e999 (exceeds f64 range, overflows to infinity)
     ValueOutOfRange,
 
     /// Too many positional arguments were supplied.

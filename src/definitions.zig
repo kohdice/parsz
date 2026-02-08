@@ -54,7 +54,7 @@ pub const Arg = struct {
     /// Help text for this argument. Currently unused; intended for future help/usage message generation.
     help: ?[]const u8 = null,
     /// When true, this argument accepts multiple values.
-    /// The corresponding ParseResult field becomes `[]const T` (a heap-allocated slice).
+    /// The corresponding ParseResult field becomes `[]const T` (heap-allocated when non-empty).
     /// The caller must call `deinit()` to free the backing memory.
     /// Cannot be combined with `default`. Flags cannot be multiple.
     multiple: bool = false,
