@@ -147,14 +147,16 @@ fn validateField(
 
 /// Convert a runtime string value to its typed form.
 /// Returns ParseError.InvalidValue on parse failure, or
-/// ParseError.ValueOutOfRange when an integer exceeds the i64 range.
+/// ParseError.ValueOutOfRange when a numeric value exceeds the target type's range
+/// (integer overflow for i64, float overflow to infinity for f64).
 /// T is constrained to {[]const u8, i64, f64, bool} by valueTypeToZigType,
 /// making the trailing @compileError unreachable in practice.
 ///
 /// For i64: only base-10 decimal notation is accepted (no hex, octal, or binary prefixes).
 ///
-/// For f64: hex float literals (0x...) and non-finite values (nan, inf) are
-/// rejected — CLI arguments should use decimal notation only.
+/// For f64: hex float literals (0x...) and non-finite literals (nan, inf) are
+/// rejected as InvalidValue. Decimal values that overflow to infinity (e.g., 1e999)
+/// are rejected as ValueOutOfRange.
 ///
 /// Note: For string type, an empty string (e.g., --output=) is accepted as-is.
 /// This is intentional — an empty string is a valid string value.
@@ -174,7 +176,17 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
         const val = std.fmt.parseFloat(f64, str) catch |err| return switch (err) {
             error.InvalidCharacter => ParseError.InvalidValue,
         };
-        if (!std.math.isFinite(val)) return ParseError.InvalidValue;
+        if (!std.math.isFinite(val)) {
+            // Distinguish non-finite literals (inf/nan) from numeric overflow.
+            // "inf", "nan", etc. are genuinely invalid CLI input → InvalidValue.
+            // Decimal numbers that overflow to infinity (e.g., "1e999") exceed
+            // the f64 range → ValueOutOfRange, consistent with integer overflow.
+            const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
+            if (s.len > 0 and (s[0] == 'i' or s[0] == 'I' or s[0] == 'n' or s[0] == 'N')) {
+                return ParseError.InvalidValue;
+            }
+            return ParseError.ValueOutOfRange;
+        }
         return val;
     }
     if (T == bool) return definitions.parseBool(str) catch |err| return switch (err) {
@@ -905,6 +917,25 @@ test "validator: multiple integer ValueOutOfRange" {
     try testing.expectEqualStrings("nums", diagnostic.arg_name);
     try testing.expectEqualStrings("num", diagnostic.flag_name);
     try testing.expectEqualStrings("99999999999999999999", diagnostic.provided_value);
+}
+
+test "validator: float overflow → ValueOutOfRange" {
+    const cases = .{ "1e999", "-1e999", "1e309", "-1e309" };
+    inline for (cases) |input| {
+        var tok = Tokenizer{ .args = &.{"--ratio=" ++ input} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, float_cmd, &raw, null));
+    }
+}
+
+test "validator: diagnostic on float ValueOutOfRange includes all fields" {
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{"--ratio=1e999"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, float_cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("ratio", diagnostic.arg_name);
+    try testing.expectEqualStrings("ratio", diagnostic.flag_name);
+    try testing.expectEqualStrings("1e999", diagnostic.provided_value);
 }
 
 test "validator: diagnostic on MissingRequired for short-only option" {
