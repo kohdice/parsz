@@ -47,7 +47,9 @@ pub const Arg = struct {
     /// Short option character (e.g., 'o' → -o)
     short: ?u8 = null,
     required: bool = false,
-    /// Default value (string format)
+    /// Default value as a string literal.
+    /// For non-string value_type (integer, float, boolean), the string is
+    /// validated at comptime to ensure it can be parsed to the target type.
     default: ?[]const u8 = null,
     /// Help text for this argument. Currently unused; intended for future help/usage message generation.
     help: ?[]const u8 = null,
