@@ -157,7 +157,10 @@ fn validateField(
 /// This is intentional — an empty string is a valid string value.
 fn convertValue(comptime T: type, str: []const u8) ParseError!T {
     if (T == []const u8) return str;
-    if (T == i64) return std.fmt.parseInt(i64, str, 10) catch return ParseError.InvalidValue;
+    if (T == i64) return std.fmt.parseInt(i64, str, 10) catch |err| return switch (err) {
+        error.Overflow => ParseError.ValueOutOfRange,
+        error.InvalidCharacter => ParseError.InvalidValue,
+    };
     if (T == f64) {
         // Reject hex float literals (0x1.fp10, -0xFF, etc.) — CLI arguments
         // should use decimal notation only. std.fmt.parseFloat accepts hex
@@ -757,13 +760,13 @@ test "validator: i64 boundary values" {
     {
         var tok = Tokenizer{ .args = &.{"--num=9223372036854775808"} };
         var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
-        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, int_cmd, &raw, null));
     }
     // underflow beyond min
     {
         var tok = Tokenizer{ .args = &.{"--num=-9223372036854775809"} };
         var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
-        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, int_cmd, &raw, null));
     }
 }
 

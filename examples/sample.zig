@@ -58,6 +58,7 @@ pub fn main() !void {
         error.MissingValue,
         error.MissingRequired,
         error.InvalidValue,
+        error.ValueOutOfRange,
         error.TooManyPositionals,
         error.DuplicateArg,
         => {

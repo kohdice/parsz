@@ -23,6 +23,7 @@
 /// | MissingValue      | x        | x         |                |
 /// | MissingRequired   | x        | x (*)     |                |
 /// | InvalidValue      | x        | x (*)     | x              |
+/// | ValueOutOfRange   | x        | x (*)     | x              |
 /// | TooManyPositionals| x (**)   |           | x              |
 /// | DuplicateArg      | x        | x         | x              |
 ///
@@ -71,6 +72,10 @@ pub const ParseError = error{
     /// Type conversion failed, or a flag received a value.
     /// Example: --count=abc, --flag=value
     InvalidValue,
+
+    /// A numeric value was syntactically valid but exceeded the target type's range.
+    /// Example: --count=99999999999999999999 (exceeds i64 range)
+    ValueOutOfRange,
 
     /// Too many positional arguments were supplied.
     /// This occurs when there is no trailing "multiple" positional.
