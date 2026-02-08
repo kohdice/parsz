@@ -68,20 +68,17 @@ pub fn validate(
 ) (ParseError || error{OutOfMemory})!ParseResult(cmd) {
     var result: ParseResult(cmd) = undefined;
 
-    // Initialize flag and multiple fields so errdefer deinitResult() is safe.
-    // This MUST happen before errdefer because deinitResult() iterates ALL
-    // multiple fields — if validation of field N fails, fields N+1, N+2, etc.
-    // must already hold safe values (not undefined memory).
+    // Initialize multiple fields so errdefer deinitResult() is safe.
+    // deinitResult() iterates ALL multiple fields, so if validation of field N
+    // fails, fields N+1, N+2, etc. must already hold safe values (not undefined).
+    // This initialization and the errdefer below must both appear before the
+    // validation loop, which is the first point where errors can occur.
     //
-    // Non-flag, non-multiple fields are left as `undefined` here intentionally:
-    // 1. errdefer's deinitResult() only frees `multiple` fields
-    // 2. The validation loop below will assign all these fields before `result` is returned
-    // If validation fails partway through, only the already-initialized `multiple` fields
-    // need cleanup, and those were already set to safe empty slices above.
+    // Non-multiple fields are left as `undefined` here intentionally:
+    // deinitResult() only frees `multiple` fields, and the validation loop
+    // below will assign all non-multiple fields before `result` is returned.
     inline for (cmd.args) |arg| {
-        if (arg.kind == .flag) {
-            @field(&result, arg.name) = false;
-        } else if (arg.multiple) {
+        if (arg.multiple) {
             @field(&result, arg.name) = &.{};
         }
     }
@@ -234,6 +231,9 @@ fn validateMultipleField(
     // The raw_list's backing buffer is NOT transferred (unlike the string case
     // above); it will be freed by deinitRawResult() after validate() returns.
     const items = raw_list.items;
+    if (items.len == 0) {
+        return &.{};
+    }
     const result = try allocator.alloc(T, items.len);
     errdefer allocator.free(result);
 
