@@ -244,6 +244,12 @@ pub fn deinitResult(
             }
         }
     }
+
+    // Poison the entire result struct so that any subsequent use (including a
+    // second deinit call) triggers a safety-checked illegal behavior in
+    // Debug/ReleaseSafe builds. This follows the same pattern as
+    // std.ArrayListUnmanaged.deinit which sets `self.* = undefined`.
+    result.* = undefined;
 }
 
 const testing = std.testing;

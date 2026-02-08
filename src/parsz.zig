@@ -60,8 +60,8 @@ pub fn parse(
 /// For commands with no `multiple` arguments, this is a no-op.
 ///
 /// WARNING: Do not call deinit() twice on the same result. After the first
-/// call, the freed slices still hold their original `len` values, so a second
-/// call would attempt to free already-freed memory (undefined behavior).
+/// call, the result is poisoned (`= undefined`), so a second call will trigger
+/// safety-checked illegal behavior in Debug/ReleaseSafe builds.
 pub fn deinit(
     comptime cmd: Command,
     result: *ParseResult(cmd),
