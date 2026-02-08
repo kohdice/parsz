@@ -21,7 +21,7 @@ const ParseError = errors.ParseError;
 /// - flag           → bool            (initial: false)
 /// - single option  → ?[]const u8     (initial: null)
 /// - single positional → ?[]const u8  (initial: null)
-/// - multiple option/positional → std.ArrayListUnmanaged([]const u8)
+/// - multiple option/positional → std.ArrayListUnmanaged([]const u8)  (initial: .{})
 pub fn RawResult(comptime cmd: Command) type {
     @setEvalBranchQuota(10_000);
     comptime definitions.validateCommand(cmd);
@@ -565,4 +565,29 @@ test "parser: multiple option via short inline value" {
 test "parser: duplicate via mixed short and long" {
     var tok = Tokenizer{ .args = &.{ "-o", "a", "--output=b" } };
     try testing.expectError(ParseError.DuplicateArg, parseTokens(testing.allocator, &tok, test_cmd, null));
+}
+
+test "parser: duplicate via mixed long then short" {
+    var tok = Tokenizer{ .args = &.{ "--output=a", "-o", "b" } };
+    try testing.expectError(ParseError.DuplicateArg, parseTokens(testing.allocator, &tok, test_cmd, null));
+}
+
+test "parser: short cluster starting with option consumes rest as value" {
+    // -ov: 'o' is an option, so "v" is consumed as its value (not as flag -v)
+    var tok = Tokenizer{ .args = &.{"-ov"} };
+    const result = try parseTokens(testing.allocator, &tok, test_cmd, null);
+    try testing.expect(result.verbose == false);
+    try testing.expectEqualStrings("v", result.output.?);
+}
+
+test "parser: long name substring does not match" {
+    // --verb should not match --verbose
+    const cmd = Command{
+        .name = "sub",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .long = "verbose" },
+        },
+    };
+    var tok = Tokenizer{ .args = &.{"--verb"} };
+    try testing.expectError(ParseError.UnknownFlag, parseTokens(testing.allocator, &tok, cmd, null));
 }
