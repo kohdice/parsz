@@ -100,15 +100,14 @@ pub fn validate(
             }
         } else {
             @field(&result, arg.name) = validateField(arg, @field(raw, arg.name)) catch |err| {
-                if (diagnostic) |d| {
-                    d.arg_name = arg.name;
-                    d.flag_name = comptime flagDisplayName(arg);
-                    if (arg.kind != .flag) {
-                        if (@field(raw, arg.name)) |v| {
-                            d.provided_value = v;
-                        }
-                    }
-                }
+                if (diagnostic) |d| d.* = .{
+                    .arg_name = arg.name,
+                    .flag_name = comptime flagDisplayName(arg),
+                    .provided_value = if (arg.kind != .flag)
+                        (@field(raw, arg.name) orelse "")
+                    else
+                        "",
+                };
                 return err;
             };
         }
