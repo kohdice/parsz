@@ -84,6 +84,7 @@ pub fn validate(
                 allocator,
                 &@field(raw, arg.name),
                 arg.name,
+                comptime flagDisplayName(arg),
                 diagnostic,
             );
             if (arg.required and @field(&result, arg.name).len == 0) {
@@ -185,6 +186,7 @@ fn validateMultipleField(
     allocator: std.mem.Allocator,
     raw_list: *std.ArrayListUnmanaged([]const u8),
     comptime arg_name: []const u8,
+    comptime flag_name: []const u8,
     diagnostic: ?*Diagnostic,
 ) (ParseError || error{OutOfMemory})![]const T {
     if (T == []const u8) {
@@ -202,7 +204,7 @@ fn validateMultipleField(
 
     for (items, 0..) |str, i| {
         result[i] = convertValue(T, str) catch |err| {
-            if (diagnostic) |d| d.* = .{ .arg_name = arg_name, .provided_value = str };
+            if (diagnostic) |d| d.* = .{ .arg_name = arg_name, .flag_name = flag_name, .provided_value = str };
             return err;
         };
     }
@@ -500,6 +502,7 @@ test "validator: diagnostic on multiple integer with invalid value" {
 
     try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, multi_int_cmd, &raw, &diagnostic));
     try testing.expectEqualStrings("nums", diagnostic.arg_name);
+    try testing.expectEqualStrings("num", diagnostic.flag_name);
     try testing.expectEqualStrings("abc", diagnostic.provided_value);
 }
 
@@ -571,6 +574,43 @@ test "validator: errdefer safety with multiple fields on partial failure" {
     defer parser.deinitRawResult(two_multi_cmd, &raw, testing.allocator);
 
     try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, two_multi_cmd, &raw, null));
+}
+
+const multi_short_only_cmd = Command{
+    .name = "mso",
+    .args = &.{
+        .{ .name = "nums", .kind = .option, .value_type = .integer, .short = 'n', .multiple = true },
+    },
+};
+
+test "validator: diagnostic on multiple with short-only option includes flag_name" {
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{ "-n", "1", "-n", "abc" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, multi_short_only_cmd, null);
+    defer parser.deinitRawResult(multi_short_only_cmd, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, multi_short_only_cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("nums", diagnostic.arg_name);
+    try testing.expectEqualStrings("n", diagnostic.flag_name);
+    try testing.expectEqualStrings("abc", diagnostic.provided_value);
+}
+
+test "validator: diagnostic on multiple positional InvalidValue has empty flag_name" {
+    const multi_int_pos_cmd = Command{
+        .name = "mip",
+        .args = &.{
+            .{ .name = "nums", .kind = .positional, .value_type = .integer, .multiple = true },
+        },
+    };
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{ "1", "abc", "3" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, multi_int_pos_cmd, null);
+    defer parser.deinitRawResult(multi_int_pos_cmd, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, multi_int_pos_cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("nums", diagnostic.arg_name);
+    try testing.expectEqualStrings("", diagnostic.flag_name);
+    try testing.expectEqualStrings("abc", diagnostic.provided_value);
 }
 
 test "validator: diagnostic on missing required includes flag_name" {
