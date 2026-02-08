@@ -334,6 +334,64 @@ test "integration: repeated short flag cluster" {
     try testing.expectEqualStrings("input.txt", result.input);
 }
 
+test "integration: GNU-style options after positional (permutation)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+            .{ .name = "output", .kind = .option, .short = 'o', .long = "output", .default = "out.txt" },
+            .{ .name = "input", .kind = .positional, .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "input.txt", "-v", "-o", "result.txt" };
+    const result = try parse(testing.allocator, argv, cmd, null);
+
+    try testing.expect(result.verbose == true);
+    try testing.expectEqualStrings("result.txt", result.output);
+    try testing.expectEqualStrings("input.txt", result.input);
+}
+
+test "integration: GNU-style interleaved options and positionals" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+            .{ .name = "output", .kind = .option, .long = "output", .required = true },
+            .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+            .{ .name = "input", .kind = .positional, .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "--output=result.txt", "input.txt", "-v", "--count=5" };
+    const result = try parse(testing.allocator, argv, cmd, null);
+
+    try testing.expect(result.verbose == true);
+    try testing.expectEqualStrings("result.txt", result.output);
+    try testing.expectEqual(@as(i64, 5), result.count);
+    try testing.expectEqualStrings("input.txt", result.input);
+}
+
+test "integration: GNU-style multiple positionals with interleaved options" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+            .{ .name = "files", .kind = .positional, .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "a.txt", "-v", "b.txt", "c.txt" };
+    var result = try parse(testing.allocator, argv, cmd, null);
+    defer deinit(cmd, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    try testing.expectEqual(@as(usize, 3), result.files.len);
+    try testing.expectEqualStrings("a.txt", result.files[0]);
+    try testing.expectEqualStrings("b.txt", result.files[1]);
+    try testing.expectEqualStrings("c.txt", result.files[2]);
+}
+
 test "integration: empty string option value" {
     const cmd = Command{
         .name = "app",
@@ -345,4 +403,118 @@ test "integration: empty string option value" {
     const argv: []const [:0]const u8 = &.{"--output="};
     const result = try parse(testing.allocator, argv, cmd, null);
     try testing.expectEqualStrings("", result.output);
+}
+
+test "integration: option value containing '='" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "config", .kind = .option, .long = "config", .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"--config=key=value"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqualStrings("key=value", result.config);
+}
+
+test "integration: integer positional argument" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "port", .kind = .positional, .value_type = .integer, .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"8080"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqual(@as(i64, 8080), result.port);
+}
+
+test "integration: float positional argument" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "threshold", .kind = .positional, .value_type = .float, .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"0.75"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectApproxEqAbs(@as(f64, 0.75), result.threshold, 0.001);
+}
+
+test "integration: multiple float options" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "--ratio=1.5", "--ratio=-2.0", "--ratio=3.14" };
+    var result = try parse(testing.allocator, argv, cmd, null);
+    defer deinit(cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 3), result.ratios.len);
+    try testing.expectApproxEqAbs(@as(f64, 1.5), result.ratios[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, -2.0), result.ratios[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 3.14), result.ratios[2], 0.001);
+}
+
+test "integration: short-only option without long" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "-n", "42" };
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqual(@as(i64, 42), result.num);
+}
+
+test "integration: short-only option with inline value" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"-n42"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqual(@as(i64, 42), result.num);
+}
+
+test "integration: diagnostic on required multiple missing" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "files", .kind = .positional, .multiple = true, .required = true },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{};
+    try testing.expectError(ParseError.MissingRequired, parse(testing.allocator, argv, cmd, &diagnostic));
+    try testing.expectEqualStrings("files", diagnostic.arg_name);
+    try testing.expectEqualStrings("", diagnostic.flag_name);
+}
+
+test "integration: diagnostic on multiple option InvalidValue includes flag_name" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{ "--num=1", "--num=abc" };
+    try testing.expectError(ParseError.InvalidValue, parse(testing.allocator, argv, cmd, &diagnostic));
+    try testing.expectEqualStrings("nums", diagnostic.arg_name);
+    try testing.expectEqualStrings("num", diagnostic.flag_name);
+    try testing.expectEqualStrings("abc", diagnostic.provided_value);
 }
