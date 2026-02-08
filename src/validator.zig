@@ -67,6 +67,12 @@ pub fn validate(
     // This MUST happen before errdefer because deinitResult() iterates ALL
     // multiple fields — if validation of field N fails, fields N+1, N+2, etc.
     // must already hold safe values (not undefined memory).
+    //
+    // Non-flag, non-multiple fields are left as `undefined` here intentionally:
+    // 1. errdefer's deinitResult() only frees `multiple` fields
+    // 2. The validation loop below will assign all these fields before `result` is returned
+    // If validation fails partway through, only the already-initialized `multiple` fields
+    // need cleanup, and those were already set to safe empty slices above.
     inline for (cmd.args) |arg| {
         if (arg.kind == .flag) {
             @field(&result, arg.name) = false;
@@ -179,7 +185,7 @@ fn convertDefault(
 }
 
 /// Return a display name for the flag/option in diagnostic messages.
-/// For options: returns the long name if available, otherwise the short character.
+/// For flags/options: returns the long name if available, otherwise the short character.
 /// For positionals: returns an empty string (no flag form).
 fn flagDisplayName(comptime arg: Arg) []const u8 {
     if (arg.long) |long| return long;

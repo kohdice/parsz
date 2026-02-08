@@ -139,9 +139,8 @@ fn handleShortCluster(
                     found = true;
                     switch (arg.kind) {
                         .flag => {
-                            // Flags are idempotent: repeating -v or -v --verbose
-                            // simply sets the bool to true again. This follows POSIX/UNIX
-                            // convention where tools like ssh -vvv accept repeated flags.
+                            // Flags are idempotent: repeating -v or -vv
+                            // simply sets the bool to true again.
                             @field(result, arg.name) = true;
                         },
                         .option, .positional => {
@@ -183,9 +182,7 @@ fn handleLong(
             if (std.mem.eql(u8, name, long_name)) {
                 switch (arg.kind) {
                     .flag => {
-                        // Flags are idempotent: repeating -v or -v --verbose
-                        // simply sets the bool to true again. This follows POSIX/UNIX
-                        // convention where tools like ssh -vvv accept repeated flags.
+                        // See handleShortCluster for rationale on flag idempotency.
                         if (inline_value) |val| {
                             if (diagnostic) |d| d.* = .{ .arg_name = arg.name, .flag_name = long_name, .provided_value = val };
                             return ParseError.InvalidValue;

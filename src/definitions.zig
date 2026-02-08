@@ -27,7 +27,7 @@ pub const ValueType = enum {
 /// Valid field combinations per `ArgKind`:
 /// - flag:       short/long (at least one), value_type must be .boolean,
 ///               required/default/multiple are all forbidden
-/// - option:     short/long (at least one), value_type, required, default, multiple
+/// - option:     short/long (at least one required); value_type, required, default, multiple are allowed
 /// - positional: value_type, required, default, multiple (short/long forbidden)
 ///
 /// Cross-field constraints (apply to all kinds):
@@ -49,7 +49,7 @@ pub const Arg = struct {
     required: bool = false,
     /// Default value (string format)
     default: ?[]const u8 = null,
-    /// Help text for this argument. Reserved for future help/usage message generation.
+    /// Help text for this argument. Currently unused; intended for future help/usage message generation.
     help: ?[]const u8 = null,
     multiple: bool = false,
 };
@@ -57,7 +57,7 @@ pub const Arg = struct {
 pub const Command = struct {
     /// Command name (required, non-empty)
     name: []const u8,
-    /// Description of the command. Reserved for future help/usage message generation.
+    /// Description of the command. Currently unused; intended for future help/usage message generation.
     about: ?[]const u8 = null,
     args: []const Arg = &.{},
 };

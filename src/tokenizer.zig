@@ -42,7 +42,7 @@ pub const Tokenizer = struct {
     /// 2. "--" exact match → .end_of_options (sets options_ended = true)
     /// 3. "-" exact match → .positional (POSIX G13: stdin/stdout convention)
     /// 4. "--" prefix (3+ chars) → .long (split on '=' if present),
-    ///    except "--=..." (name starting with '=') → .positional
+    ///    except "--=" or "--=..." (first char after "--" is '=') → .positional
     /// 5. "-" prefix (2+ chars) → .short
     /// 6. Otherwise → .positional
     pub fn next(self: *Tokenizer) ?Token {

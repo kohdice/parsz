@@ -58,6 +58,10 @@ pub fn parse(
 ///
 /// This releases backing arrays for `multiple` arguments.
 /// For commands with no `multiple` arguments, this is a no-op.
+///
+/// WARNING: Do not call deinit() twice on the same result. After the first
+/// call, the freed slices still hold their original `len` values, so a second
+/// call would attempt to free already-freed memory (undefined behavior).
 pub fn deinit(
     comptime cmd: Command,
     result: *ParseResult(cmd),

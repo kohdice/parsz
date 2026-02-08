@@ -2,6 +2,8 @@
 ///
 /// All slices are non-owning references to either argv memory or comptime
 /// string literals, so no allocation or deallocation is needed.
+/// Lifetime: fields referencing argv are valid only while the argv slice is alive.
+/// Fields referencing comptime literals (arg_name, flag_name for definitions) have static lifetime.
 ///
 /// When `null` is passed as the diagnostic parameter, error reporting is
 /// skipped with zero overhead — no fields are populated.
