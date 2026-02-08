@@ -10,5 +10,5 @@ comptime {
             .{ .name = "bar", .kind = .option, .short = 'y', .long = "same" }, // Invalid: duplicate long
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

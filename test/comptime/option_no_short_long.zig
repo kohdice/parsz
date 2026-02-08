@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_option", .kind = .option }, // Invalid: no long or short
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

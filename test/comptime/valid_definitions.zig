@@ -3,7 +3,6 @@
 const parsz = @import("parsz");
 
 comptime {
-    // Valid Command with multiple args
     const cmd = parsz.Command{
         .name = "myapp",
         .about = "A sample application",
@@ -13,11 +12,11 @@ comptime {
             .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .default = "10" },
             .{ .name = "config", .kind = .option, .long = "config", .required = true },
             .{ .name = "input", .kind = .positional, .required = true },
-            .{ .name = "extras", .kind = .positional, .multiple = true },
+            .{ .name = "extras", .kind = .positional, .multiple = true, .required = true },
         },
     };
-    // parse() calls validateCommand() internally
-    parsz.parse(undefined, &.{}, cmd);
+    // ParseResult() calls validateCommand() internally at comptime
+    _ = parsz.ParseResult(cmd);
 }
 
 test "valid definitions compile" {

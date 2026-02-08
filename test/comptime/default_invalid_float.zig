@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_option", .kind = .option, .value_type = .float, .long = "ratio", .default = "not_a_number" }, // Invalid: not a valid float
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_option", .kind = .option, .long = "output@file" }, // Invalid: contains '@'
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_positional", .kind = .positional, .short = 'x' }, // Invalid: positional cannot have short
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

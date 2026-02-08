@@ -41,17 +41,24 @@ pub fn build(b: *std.Build) void {
     const comptime_test_step = b.step("test-comptime", "Run comptime validation tests");
 
     // Valid definitions (should compile successfully)
-    const valid_test = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/comptime/valid_definitions.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "parsz", .module = mod },
-            },
-        }),
-    });
-    comptime_test_step.dependOn(&b.addRunArtifact(valid_test).step);
+    const valid_tests = .{
+        "test/comptime/valid_definitions.zig",
+        "test/comptime/keyword_arg_name.zig",
+    };
+
+    inline for (valid_tests) |path| {
+        const valid_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(path),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "parsz", .module = mod },
+                },
+            }),
+        });
+        comptime_test_step.dependOn(&b.addRunArtifact(valid_test).step);
+    }
 
     // Error tests - each expects a specific compile error
     const error_tests = .{
@@ -66,14 +73,15 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/flag_multiple.zig", "flag cannot be multiple" },
         .{ "test/comptime/flag_with_default.zig", "flag cannot have default value" },
         .{ "test/comptime/flag_required.zig", "flag cannot be required" },
-        .{ "test/comptime/flag_no_short_long.zig", "flag must have long or short." },
+        .{ "test/comptime/flag_no_short_long.zig", "flag must have long or short" },
 
         // Kind rules: option
-        .{ "test/comptime/option_no_short_long.zig", "option must have long or short." },
+        .{ "test/comptime/option_no_short_long.zig", "option must have long or short" },
 
         // Kind rules: positional
-        .{ "test/comptime/positional_with_short.zig", "positional cannot have long or short." },
+        .{ "test/comptime/positional_with_short.zig", "positional cannot have long or short" },
         .{ "test/comptime/positional_after_multiple.zig", "cannot come after a multiple positional argument" },
+        .{ "test/comptime/required_positional_after_optional.zig", "required positional Arg 'filename' cannot come after an optional positional argument" },
 
         // Short/long format validation
         .{ "test/comptime/short_dash.zig", "short must be alphanumeric" },
@@ -84,6 +92,8 @@ pub fn build(b: *std.Build) void {
         // Default value validation
         .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
         .{ "test/comptime/default_invalid_float.zig", "is not a valid float" },
+        .{ "test/comptime/default_nan_float.zig", "is not a valid float" },
+        .{ "test/comptime/default_inf_float.zig", "is not a valid float" },
         .{ "test/comptime/default_invalid_boolean.zig", "is not a valid boolean" },
 
         // Cross-field constraints

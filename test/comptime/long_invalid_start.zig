@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_option", .kind = .option, .long = "123invalid" }, // Invalid: long must start with a letter
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

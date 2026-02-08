@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_option", .kind = .option, .long = "test", .multiple = true, .default = "value" }, // Invalid: multiple cannot have default
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

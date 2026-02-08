@@ -7,5 +7,5 @@ comptime {
         .name = "", // Invalid: empty command name
         .args = &.{},
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

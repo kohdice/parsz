@@ -1,5 +1,44 @@
+/// Diagnostic information populated when a parse error occurs.
+///
+/// All slices are non-owning references to either argv memory or comptime
+/// string literals, so no allocation or deallocation is needed.
+///
+/// When `null` is passed as the diagnostic parameter, error reporting is
+/// skipped with zero overhead — no fields are populated.
+///
+/// Note: `error.OutOfMemory` does NOT populate Diagnostic fields.
+///
+/// Field population per error variant:
+/// | Error             | arg_name | flag_name | provided_value |
+/// |-------------------|----------|-----------|----------------|
+/// | UnknownFlag       |          | x         |                |
+/// | MissingValue      | x        | x         |                |
+/// | MissingRequired   | x        | x (*)     |                |
+/// | InvalidValue      | x        | x (*)     | x              |
+/// | TooManyPositionals| x        |           | x              |
+/// | DuplicateArg      | x        | x         | x              |
+///
+/// (*) flag_name is set for option/flag kinds; empty for positionals.
+///
+/// Usage:
+/// ```
+/// var diagnostic: Diagnostic = .{};
+/// const result = parsz.parse(allocator, argv, cmd, &diagnostic) catch |err| {
+///     // diagnostic fields are now populated
+/// };
+/// ```
+pub const Diagnostic = struct {
+    /// The Arg.name from the command definition that caused the error.
+    /// Empty if the error is for an unknown flag (no matching definition).
+    arg_name: []const u8 = "",
+    /// The flag name from the command line (e.g., "verbose" for --verbose).
+    /// For short flags, a single-character slice from the cluster.
+    flag_name: []const u8 = "",
+    /// The value string that caused the error (e.g., "abc" for --count=abc).
+    provided_value: []const u8 = "",
+};
+
 /// Runtime parse errors returned when the command spec is valid but the input is not.
-/// This error set is intentionally small and does not carry extra diagnostics.
 pub const ParseError = error{
     /// An undefined option was provided.
     /// Example: -x / --unknown

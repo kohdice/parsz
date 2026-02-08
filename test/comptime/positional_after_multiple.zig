@@ -10,5 +10,5 @@ comptime {
             .{ .name = "output", .kind = .positional }, // Invalid: after multiple positional
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }
