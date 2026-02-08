@@ -4,39 +4,54 @@ This file provides guidance to AI agents and agentic coding tools when working w
 
 ## Project Overview
 
-parsz is a command-line argument parser library using only the Zig standard library. It adopts a 3-stage pipeline design based on compiler theory.
+parsz is a command-line argument parser library using only the Zig standard library. It adopts a 3-stage pipeline design based on compiler theory (v1 targets single commands only, no subcommands).
 
-## Build and Test
+## Build Commands
 
 ```bash
-# Run tests
-zig build test
-
-# Fuzz testing (crash resistance verification)
-zig build test --fuzz
+zig build test          # Run library tests (src/parsz.zig)
+zig build test-comptime # Run comptime validation error tests
+zig build test --fuzz   # Fuzz testing (crash resistance)
+zig build examples      # Build examples to zig-out/bin/
+zig fmt --check .       # Format check (CI runs this)
 ```
 
 ## Architecture
 
-### Pipeline Structure
-
 ```
 argv[] → Tokenizer → Token[] → Parser → RawResult → Validator → ParseResult
                                 ↑                      ↑
-                          CommandDef            CommandDef + constraints
+                          Command            Command + constraints
 ```
 
-### Core Components
+This 3-stage pipeline mirrors compiler design:
+- **Tokenizer**: Lexical analysis (argv to Token array)
+- **Parser**: Syntax analysis (Token array to RawResult)
+- **Validator**: Semantic analysis (type conversion, constraint checking)
 
-1. **Definition Layer** (`CommandDef`, `ArgDef`): Declarative CLI specification
-2. **Tokenizer**: Converts argv to Token array (lexical analysis)
-3. **Parser**: Generates RawResult from Token array (syntax analysis)
-4. **Validator**: Type conversion and constraint checking (semantic analysis)
-5. **API Layer**: Builder API (procedural), Spec API (compile-time reflection)
+### Module Structure
 
-### File Structure
+```
+src/
+  parsz.zig       # Public API entry point (re-exports definitions/errors)
+  definitions.zig # Arg, Command, validateArg/validateCommand (comptime)
+  errors.zig      # ParseError (runtime error set)
+```
 
-- `src/parsz.zig`: Main module
+### Arg Kind Constraints (enforced at comptime)
+
+| Constraint           | flag | option | positional |
+|---------------------|------|--------|------------|
+| value_type=boolean  | ✓ required | optional | optional |
+| short/long          | ✓ at least one | ✓ at least one | ✗ forbidden |
+| required            | ✗ forbidden | optional | optional |
+| default             | ✗ forbidden | optional | optional |
+| multiple            | ✗ forbidden | optional | optional |
+
+Additional cross-field rules:
+- `required` and `default` cannot both be set
+- `multiple` cannot have `default`
+- Positional after `multiple` positional is forbidden
 
 ## Coding Conventions
 
@@ -44,22 +59,22 @@ argv[] → Tokenizer → Token[] → Parser → RawResult → Validator → Pars
 
 - All functions explicitly receive an Allocator
 - Use `defer` / `errdefer` to separate cleanup for success/failure paths
-- Guarantee reliable memory cleanup on errors
 
-### Error Design
+### Testing
 
-- `ParseError` holds diagnostic information (structured data)
-- Display is handled by a separate rendering layer
-- Report multiple errors at once when possible
-
-### Testing Strategy
-
-- Unit tests: Concrete examples and edge cases
-- Property-based tests: Use `std.testing.fuzz`
-- Each property test should include a comment referencing the design document property number:
+- Property-based tests use `std.testing.fuzz`
+- Reference design doc properties in test comments:
   ```zig
   // **Feature: zig-cli-parser, Property 1: Command definition validation**
   ```
+
+### Adding Comptime Error Tests
+
+1. Create `test/comptime/<test_name>.zig` with code that should fail to compile
+2. Register in `build.zig` under `error_tests` with the expected error substring:
+   ```zig
+   .{ "test/comptime/<test_name>.zig", "expected error message substring" },
+   ```
 
 ## References
 
