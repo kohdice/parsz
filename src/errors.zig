@@ -4,8 +4,10 @@
 /// string literals, so no allocation or deallocation is needed.
 /// Lifetime (per field):
 /// - arg_name: always a comptime literal (static lifetime).
-/// - flag_name: comptime literal (static) for known args; argv slice
-///   (argv lifetime) for unknown flags.
+/// - flag_name: for known long options/flags (parser), comptime literal (static);
+///   for known short options/flags (parser), argv slice (argv lifetime);
+///   for unknown flags, argv slice (argv lifetime).
+///   In validator errors (MissingRequired/InvalidValue), always comptime (static).
 /// - provided_value: always an argv slice when non-empty (argv lifetime).
 ///
 /// When `null` is passed as the diagnostic parameter, error reporting is
@@ -38,8 +40,10 @@ pub const Diagnostic = struct {
     arg_name: []const u8 = "",
     /// The flag/option name relevant to the error.
     /// For unknown flags: a slice from the argv element (argv lifetime).
-    /// For known flags/options: from the comptime definition (static lifetime).
-    /// For short-only options, a single character (e.g., "o" for -o).
+    /// For known long options/flags (parser): comptime literal (static lifetime).
+    /// For known short options/flags (parser): a 1-byte slice from the argv
+    ///   element (argv lifetime), e.g., "o" for -o.
+    /// For validator errors (MissingRequired/InvalidValue): comptime literal (static).
     /// For positionals: empty string.
     flag_name: []const u8 = "",
     /// The value string that caused the error (e.g., "abc" for --count=abc).
