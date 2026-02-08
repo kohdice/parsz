@@ -154,6 +154,13 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
     if (T == []const u8) return str;
     if (T == i64) return std.fmt.parseInt(i64, str, 10) catch return ParseError.InvalidValue;
     if (T == f64) {
+        // Reject hex float literals (0x1.fp10, -0xFF, etc.) — CLI arguments
+        // should use decimal notation only. std.fmt.parseFloat accepts hex
+        // floats per IEEE 754, but that format is not user-friendly for CLI input.
+        const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
+        if (s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
+            return ParseError.InvalidValue;
+        }
         const val = std.fmt.parseFloat(f64, str) catch return ParseError.InvalidValue;
         if (!std.math.isFinite(val)) return ParseError.InvalidValue;
         return val;
@@ -174,8 +181,21 @@ fn convertDefault(
     if (T == []const u8) return def;
     if (T == i64) return comptime std.fmt.parseInt(i64, def, 10) catch
         @compileError("convertDefault: '" ++ def ++ "' is not a valid i64 (invariant violation: validateDefault should have caught this)");
-    if (T == f64) return comptime std.fmt.parseFloat(f64, def) catch
-        @compileError("convertDefault: '" ++ def ++ "' is not a valid f64 (invariant violation: validateDefault should have caught this)");
+    if (T == f64) {
+        // Defense-in-depth: reject hex float notation and non-finite values.
+        // validateDefault() should already catch these, but guard here too
+        // in case the two functions drift apart.
+        comptime {
+            const s = if (def.len > 0 and (def[0] == '+' or def[0] == '-')) def[1..] else def;
+            if (s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X'))
+                @compileError("convertDefault: '" ++ def ++ "' uses hex float notation (invariant violation: validateDefault should have caught this)");
+        }
+        const val = comptime std.fmt.parseFloat(f64, def) catch
+            @compileError("convertDefault: '" ++ def ++ "' is not a valid f64 (invariant violation: validateDefault should have caught this)");
+        if (comptime !std.math.isFinite(val))
+            @compileError("convertDefault: '" ++ def ++ "' is not a finite f64 (invariant violation: validateDefault should have caught this)");
+        return val;
+    }
     if (T == bool) return comptime definitions.parseBool(def) catch
         @compileError("convertDefault: '" ++ def ++ "' is not a valid bool (invariant violation: validateDefault should have caught this)");
     @compileError("convertDefault: unsupported type " ++ @typeName(T));
@@ -528,6 +548,15 @@ test "validator: diagnostic on multiple integer with invalid value" {
 
 test "validator: non-finite float variants → error" {
     const cases = .{ "nan", "inf", "-inf", "NaN", "Infinity", "+inf", "-Infinity" };
+    inline for (cases) |input| {
+        var tok = Tokenizer{ .args = &.{"--ratio=" ++ input} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, float_cmd, &raw, null));
+    }
+}
+
+test "validator: hex float literals → error" {
+    const cases = .{ "0x1.fp10", "0XFF", "-0x1.0", "+0x1p0", "0x0" };
     inline for (cases) |input| {
         var tok = Tokenizer{ .args = &.{"--ratio=" ++ input} };
         var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);

@@ -221,6 +221,11 @@ fn validateDefault(comptime arg: Arg) void {
             };
         },
         .float => {
+            // Reject hex float literals for consistency with runtime convertValue.
+            const s = if (def.len > 0 and (def[0] == '+' or def[0] == '-')) def[1..] else def;
+            if (s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
+                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' must not use hex float notation", .{def});
+            }
             const val = std.fmt.parseFloat(f64, def) catch {
                 compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
             };

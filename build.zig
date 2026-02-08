@@ -83,6 +83,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/default_invalid_float.zig", "is not a valid float" },
         .{ "test/comptime/default_nan_float.zig", "is not a valid float" },
         .{ "test/comptime/default_inf_float.zig", "is not a valid float" },
+        .{ "test/comptime/default_hex_float.zig", "must not use hex float notation" },
         .{ "test/comptime/default_invalid_boolean.zig", "is not a valid boolean" },
 
         // Cross-field constraints
