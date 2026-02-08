@@ -63,8 +63,15 @@ pub fn main() !void {
         error.DuplicateArg,
         => {
             if (diagnostic.flag_name.len > 0 and diagnostic.arg_name.len > 0) {
-                // Known option/flag: show the flag name from the definition (e.g., "count", "n")
-                const label = if (err == error.InvalidValue and diagnostic.provided_value.len == 0) "flag" else "option";
+                // Known option/flag: determine the label by matching against the definition
+                const label: []const u8 = label: {
+                    inline for (cmd.args) |arg| {
+                        if (std.mem.eql(u8, arg.name, diagnostic.arg_name)) {
+                            break :label if (arg.kind == .flag) "flag" else "option";
+                        }
+                    }
+                    break :label "option";
+                };
                 std.debug.print("Error: {s} '{s}': {s}", .{ label, diagnostic.flag_name, @errorName(err) });
                 if (diagnostic.provided_value.len > 0) {
                     std.debug.print(" (got '{s}')", .{diagnostic.provided_value});
