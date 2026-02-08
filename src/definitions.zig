@@ -283,6 +283,42 @@ fn validateArgUniqueness(comptime cmd: Command) void {
     }
 }
 
+test "parseBool: accepts valid boolean strings" {
+    try std.testing.expectEqual(true, try parseBool("true"));
+    try std.testing.expectEqual(true, try parseBool("TRUE"));
+    try std.testing.expectEqual(true, try parseBool("True"));
+    try std.testing.expectEqual(true, try parseBool("1"));
+    try std.testing.expectEqual(false, try parseBool("false"));
+    try std.testing.expectEqual(false, try parseBool("FALSE"));
+    try std.testing.expectEqual(false, try parseBool("False"));
+    try std.testing.expectEqual(false, try parseBool("0"));
+}
+
+test "parseBool: rejects invalid strings" {
+    try std.testing.expectError(error.InvalidBool, parseBool("yes"));
+    try std.testing.expectError(error.InvalidBool, parseBool("no"));
+    try std.testing.expectError(error.InvalidBool, parseBool("2"));
+    try std.testing.expectError(error.InvalidBool, parseBool(""));
+    try std.testing.expectError(error.InvalidBool, parseBool("truthy"));
+}
+
+test "isHexFloat: detects hex float literals" {
+    try std.testing.expect(isHexFloat("0x1.0p10"));
+    try std.testing.expect(isHexFloat("0X1.0p10"));
+    try std.testing.expect(isHexFloat("+0x1.0"));
+    try std.testing.expect(isHexFloat("-0x1.0"));
+    try std.testing.expect(isHexFloat("0xABC"));
+}
+
+test "isHexFloat: rejects non-hex strings" {
+    try std.testing.expect(!isHexFloat("1.5"));
+    try std.testing.expect(!isHexFloat("-1.5"));
+    try std.testing.expect(!isHexFloat("0"));
+    try std.testing.expect(!isHexFloat(""));
+    try std.testing.expect(!isHexFloat("x"));
+    try std.testing.expect(!isHexFloat("0b101"));
+}
+
 fn validatePositionalOrder(comptime cmd: Command) void {
     var found_multiple = false;
     var found_optional = false;

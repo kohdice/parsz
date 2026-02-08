@@ -647,6 +647,76 @@ test "integration: diagnostic on TooManyPositionals with zero positional defs" {
     try testing.expectEqualStrings("unexpected", diagnostic.provided_value);
 }
 
+test "integration: long option with underscore" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "output_dir", .kind = .option, .long = "output_dir" },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"--output_dir=/tmp/out"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqualStrings("/tmp/out", result.output_dir.?);
+}
+
+test "integration: DuplicateArg on repeated non-multiple option" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "output", .kind = .option, .long = "output" },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{ "--output=a.txt", "--output=b.txt" };
+    try testing.expectError(ParseError.DuplicateArg, parse(testing.allocator, argv, cmd, &diagnostic));
+    try testing.expectEqualStrings("output", diagnostic.arg_name);
+    try testing.expectEqualStrings("output", diagnostic.flag_name);
+    try testing.expectEqualStrings("b.txt", diagnostic.provided_value);
+}
+
+test "integration: MissingValue when option is last argv element" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "output", .kind = .option, .long = "output", .short = 'o' },
+        },
+    };
+
+    // Long form: --output with no following argument
+    {
+        var diagnostic: Diagnostic = .{};
+        const argv: []const [:0]const u8 = &.{"--output"};
+        try testing.expectError(ParseError.MissingValue, parse(testing.allocator, argv, cmd, &diagnostic));
+        try testing.expectEqualStrings("output", diagnostic.arg_name);
+        try testing.expectEqualStrings("output", diagnostic.flag_name);
+    }
+    // Short form: -o with no following argument
+    {
+        var diagnostic: Diagnostic = .{};
+        const argv: []const [:0]const u8 = &.{"-o"};
+        try testing.expectError(ParseError.MissingValue, parse(testing.allocator, argv, cmd, &diagnostic));
+        try testing.expectEqualStrings("output", diagnostic.arg_name);
+    }
+}
+
+test "integration: InvalidValue when flag receives a value via --flag=value" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .long = "verbose" },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{"--verbose=yes"};
+    try testing.expectError(ParseError.InvalidValue, parse(testing.allocator, argv, cmd, &diagnostic));
+    try testing.expectEqualStrings("verbose", diagnostic.arg_name);
+    try testing.expectEqualStrings("verbose", diagnostic.flag_name);
+    try testing.expectEqualStrings("yes", diagnostic.provided_value);
+}
+
 // --- OutOfMemory safety tests ---
 //
 // These tests use FailingAllocator to verify that every allocation failure

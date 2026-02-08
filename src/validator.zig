@@ -794,3 +794,66 @@ test "validator: integer with leading zeros is accepted" {
     const result = try validate(testing.allocator, int_cmd, &raw, null);
     try testing.expectEqual(@as(i64, 7), result.num);
 }
+
+test "validator: multiple integer positional" {
+    const cmd = Command{
+        .name = "mip",
+        .args = &.{
+            .{ .name = "nums", .kind = .positional, .value_type = .integer, .multiple = true },
+        },
+    };
+    // Use "--" to pass negative numbers as positional arguments
+    var tok = Tokenizer{ .args = &.{ "10", "--", "-20", "0" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, cmd, &raw, null);
+    defer deinitResult(cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 3), result.nums.len);
+    try testing.expectEqual(@as(i64, 10), result.nums[0]);
+    try testing.expectEqual(@as(i64, -20), result.nums[1]);
+    try testing.expectEqual(@as(i64, 0), result.nums[2]);
+}
+
+test "validator: multiple float positional" {
+    const cmd = Command{
+        .name = "mfp",
+        .args = &.{
+            .{ .name = "vals", .kind = .positional, .value_type = .float, .multiple = true },
+        },
+    };
+    // Use "--" to pass negative numbers as positional arguments
+    var tok = Tokenizer{ .args = &.{ "1.5", "--", "-2.0", "0.0" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, cmd, &raw, null);
+    defer deinitResult(cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 3), result.vals.len);
+    try testing.expectEqual(@as(f64, 1.5), result.vals[0]);
+    try testing.expectEqual(@as(f64, -2.0), result.vals[1]);
+    try testing.expectEqual(@as(f64, 0.0), result.vals[2]);
+}
+
+test "validator: multiple boolean positional" {
+    const cmd = Command{
+        .name = "mbp",
+        .args = &.{
+            .{ .name = "flags", .kind = .positional, .value_type = .boolean, .multiple = true },
+        },
+    };
+    var tok = Tokenizer{ .args = &.{ "true", "false", "1", "0" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, cmd, &raw, null);
+    defer deinitResult(cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 4), result.flags.len);
+    try testing.expectEqual(true, result.flags[0]);
+    try testing.expectEqual(false, result.flags[1]);
+    try testing.expectEqual(true, result.flags[2]);
+    try testing.expectEqual(false, result.flags[3]);
+}
