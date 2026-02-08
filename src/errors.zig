@@ -66,7 +66,7 @@ pub const ParseError = error{
     MissingValue,
 
     /// A required argument was not provided.
-    /// This can happen for both option and positional arguments.
+    /// This can happen for option, positional, and `multiple` (with `required=true`) arguments.
     MissingRequired,
 
     /// Type conversion failed, or a flag received a value.
@@ -79,7 +79,8 @@ pub const ParseError = error{
     ValueOutOfRange,
 
     /// Too many positional arguments were supplied.
-    /// This occurs when there is no trailing "multiple" positional.
+    /// This occurs when all non-multiple positionals are filled and no
+    /// trailing `multiple` positional exists to absorb the excess.
     TooManyPositionals,
 
     /// An option with multiple=false was specified more than once.
