@@ -499,7 +499,7 @@ test "parser: diagnostic on flag with inline value" {
     try testing.expectEqualStrings("true", diagnostic.provided_value);
 }
 
-// --- Phase 2 tests ---
+// --- Multiple options, errdefer, and diagnostic edge case tests ---
 
 const multi_short_opt_cmd = Command{
     .name = "mso",
@@ -556,4 +556,19 @@ test "parser: multiple option long with separate values" {
     try testing.expectEqual(@as(usize, 2), result.include.items.len);
     try testing.expectEqualStrings("a", result.include.items[0]);
     try testing.expectEqualStrings("b", result.include.items[1]);
+}
+
+test "parser: multiple option via short inline value" {
+    var tok = Tokenizer{ .args = &.{ "-Ia", "-Ib" } };
+    var result = try parseTokens(testing.allocator, &tok, multi_short_opt_cmd, null);
+    defer deinitRawResult(multi_short_opt_cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), result.include.items.len);
+    try testing.expectEqualStrings("a", result.include.items[0]);
+    try testing.expectEqualStrings("b", result.include.items[1]);
+}
+
+test "parser: duplicate via mixed short and long" {
+    var tok = Tokenizer{ .args = &.{ "-o", "a", "--output=b" } };
+    try testing.expectError(ParseError.DuplicateArg, parseTokens(testing.allocator, &tok, test_cmd, null));
 }

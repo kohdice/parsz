@@ -280,7 +280,7 @@ test "integration: short option with separate negative integer value" {
     try testing.expectEqual(@as(i64, -10), result.count);
 }
 
-// --- Phase 2 integration tests ---
+// --- Default, idempotency, permutation, and edge case tests ---
 
 test "integration: float default applied" {
     const cmd = Command{
@@ -578,6 +578,21 @@ test "integration: command with no args, empty argv succeeds" {
 
     const argv: []const [:0]const u8 = &.{};
     _ = try parse(testing.allocator, argv, cmd, null);
+}
+
+test "integration: deinit is no-op for command with no multiple args" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+            .{ .name = "output", .kind = .option, .long = "output", .default = "out.txt" },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"-v"};
+    var result = try parse(testing.allocator, argv, cmd, null);
+    // deinit should be safe to call even when no multiple fields exist
+    deinit(cmd, &result, testing.allocator);
 }
 
 test "integration: command with no args, unexpected positional" {

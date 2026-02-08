@@ -518,24 +518,15 @@ test "validator: diagnostic on multiple integer with invalid value" {
     try testing.expectEqualStrings("abc", diagnostic.provided_value);
 }
 
-// --- Phase 2 tests ---
+// --- Type conversion edge cases and diagnostic tests ---
 
-test "validator: NaN float → error" {
-    var tok = Tokenizer{ .args = &.{"--ratio=nan"} };
-    var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
-    try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, float_cmd, &raw, null));
-}
-
-test "validator: Inf float → error" {
-    var tok = Tokenizer{ .args = &.{"--ratio=inf"} };
-    var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
-    try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, float_cmd, &raw, null));
-}
-
-test "validator: -Inf float → error" {
-    var tok = Tokenizer{ .args = &.{"--ratio=-inf"} };
-    var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
-    try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, float_cmd, &raw, null));
+test "validator: non-finite float variants → error" {
+    const cases = .{ "nan", "inf", "-inf", "NaN", "Infinity", "+inf", "-Infinity" };
+    inline for (cases) |input| {
+        var tok = Tokenizer{ .args = &.{"--ratio=" ++ input} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, float_cmd, &raw, null));
+    }
 }
 
 test "validator: empty string for integer → error" {
@@ -697,5 +688,34 @@ test "validator: parseBool rejects invalid strings" {
         var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
         defer parser.deinitRawResult(cmd, &raw, testing.allocator);
         try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, cmd, &raw, null));
+    }
+}
+
+test "validator: i64 boundary values" {
+    // max i64
+    {
+        var tok = Tokenizer{ .args = &.{"--num=9223372036854775807"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+        const result = try validate(testing.allocator, int_cmd, &raw, null);
+        try testing.expectEqual(@as(i64, 9223372036854775807), result.num);
+    }
+    // min i64
+    {
+        var tok = Tokenizer{ .args = &.{"--num=-9223372036854775808"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+        const result = try validate(testing.allocator, int_cmd, &raw, null);
+        try testing.expectEqual(@as(i64, -9223372036854775808), result.num);
+    }
+    // overflow beyond max
+    {
+        var tok = Tokenizer{ .args = &.{"--num=9223372036854775808"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
+    }
+    // underflow beyond min
+    {
+        var tok = Tokenizer{ .args = &.{"--num=-9223372036854775809"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
     }
 }
