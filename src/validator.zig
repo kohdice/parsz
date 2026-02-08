@@ -475,10 +475,27 @@ test "validator: required multiple with values → success" {
     try testing.expectEqual(@as(usize, 2), result.files.len);
 }
 
+test "validator: required multiple option with no values → MissingRequired" {
+    const req_multi_opt_cmd = Command{
+        .name = "rmo",
+        .args = &.{
+            .{ .name = "tags", .kind = .option, .long = "tag", .multiple = true, .required = true },
+        },
+    };
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, req_multi_opt_cmd, null);
+    defer parser.deinitRawResult(req_multi_opt_cmd, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.MissingRequired, validate(testing.allocator, req_multi_opt_cmd, &raw, &diagnostic));
+    try testing.expectEqualStrings("tags", diagnostic.arg_name);
+    try testing.expectEqualStrings("tag", diagnostic.flag_name);
+}
+
 test "validator: integer overflow → error" {
     var tok = Tokenizer{ .args = &.{"--num=99999999999999999999"} };
     var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
-    try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, int_cmd, &raw, null));
 }
 
 test "validator: invalid float string → error" {

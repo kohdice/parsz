@@ -785,6 +785,16 @@ test "integration: OutOfMemory does not leak (multiple float option)" {
     try testOomSafety(cmd, &.{ "--ratio=1.5", "--ratio=2.0", "--ratio=3.14" });
 }
 
+test "integration: OutOfMemory does not leak (multiple boolean option)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "flags", .kind = .option, .value_type = .boolean, .long = "flag", .multiple = true },
+        },
+    };
+    try testOomSafety(cmd, &.{ "--flag=true", "--flag=false", "--flag=1" });
+}
+
 test "integration: OutOfMemory does not leak (mixed multiple + required non-multiple)" {
     const cmd = Command{
         .name = "app",

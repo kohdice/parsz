@@ -580,6 +580,21 @@ test "parser: short cluster starting with option consumes rest as value" {
     try testing.expectEqualStrings("v", result.output.?);
 }
 
+test "parser: diagnostic on duplicate short-only option" {
+    const short_only_cmd = Command{
+        .name = "so",
+        .args = &.{
+            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n' },
+        },
+    };
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{ "-n", "1", "-n", "2" } };
+    try testing.expectError(ParseError.DuplicateArg, parseTokens(testing.allocator, &tok, short_only_cmd, &diagnostic));
+    try testing.expectEqualStrings("num", diagnostic.arg_name);
+    try testing.expectEqualStrings("n", diagnostic.flag_name);
+    try testing.expectEqualStrings("2", diagnostic.provided_value);
+}
+
 test "parser: long name substring does not match" {
     // --verb should not match --verbose
     const cmd = Command{
