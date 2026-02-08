@@ -819,3 +819,51 @@ test "integration: OutOfMemory does not leak (mixed multiple + required non-mult
     };
     try testOomSafety(cmd, &.{ "--output", "out.txt", "--num=1", "--num=2", "a.txt", "b.txt" });
 }
+
+test "integration: ValueOutOfRange for integer overflow" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{"--count=99999999999999999999"};
+    try testing.expectError(ParseError.ValueOutOfRange, parse(testing.allocator, argv, cmd, &diagnostic));
+    try testing.expectEqualStrings("count", diagnostic.arg_name);
+    try testing.expectEqualStrings("count", diagnostic.flag_name);
+    try testing.expectEqualStrings("99999999999999999999", diagnostic.provided_value);
+}
+
+test "integration: ValueOutOfRange for float overflow" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .required = true },
+        },
+    };
+
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{"--ratio=1e999"};
+    try testing.expectError(ParseError.ValueOutOfRange, parse(testing.allocator, argv, cmd, &diagnostic));
+    try testing.expectEqualStrings("ratio", diagnostic.arg_name);
+    try testing.expectEqualStrings("ratio", diagnostic.flag_name);
+    try testing.expectEqualStrings("1e999", diagnostic.provided_value);
+}
+
+test "integration: '--' consumed as option value when option expects value" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "output", .kind = .option, .long = "output", .required = true },
+            .{ .name = "file", .kind = .positional },
+        },
+    };
+
+    // "--" is consumed as the value for --output (not as end-of-options)
+    const argv: []const [:0]const u8 = &.{ "--output", "--", "file.txt" };
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqualStrings("--", result.output);
+    try testing.expectEqualStrings("file.txt", result.file.?);
+}
