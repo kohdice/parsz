@@ -54,7 +54,13 @@ pub fn main() !void {
     var diagnostic: parsz.Diagnostic = .{};
     var result = parsz.parse(allocator, argv, cmd, &diagnostic) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.UnknownFlag,
+        error.MissingValue,
+        error.MissingRequired,
+        error.InvalidValue,
+        error.TooManyPositionals,
+        error.DuplicateArg,
+        => {
             if (diagnostic.arg_name.len > 0) {
                 std.debug.print("Error: argument '{s}': {s}", .{ diagnostic.arg_name, @errorName(err) });
                 if (diagnostic.provided_value.len > 0) {
