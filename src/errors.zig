@@ -8,7 +8,8 @@
 ///   for known short options/flags (parser), argv slice (argv lifetime);
 ///   for unknown flags, argv slice (argv lifetime).
 ///   In validator errors (MissingRequired/InvalidValue), always comptime (static).
-/// - provided_value: always an argv slice when non-empty (argv lifetime).
+/// - provided_value: when non-empty, always an argv slice (argv lifetime);
+///   when empty (default ""), a comptime literal (static lifetime).
 ///
 /// When `null` is passed as the diagnostic parameter, error reporting is
 /// skipped with zero overhead — no fields are populated.
@@ -74,5 +75,7 @@ pub const ParseError = error{
 
     /// An option with multiple=false was specified more than once.
     /// Example: --output a --output b
+    /// Note: Flags are idempotent and never produce DuplicateArg.
+    /// Excess positional arguments produce TooManyPositionals instead.
     DuplicateArg,
 };

@@ -33,6 +33,8 @@ pub const Token = union(enum) {
 pub const Tokenizer = struct {
     args: []const [:0]const u8,
     index: usize = 0,
+    /// Set to true after encountering "--" (end-of-options marker).
+    /// When true, all subsequent argv elements are classified as .positional.
     options_ended: bool = false,
 
     /// Returns the next token, or null if all argv elements have been consumed.
