@@ -24,14 +24,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "sample",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/sample.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "parsz", .module = mod },
-            },
-        }),
+        .root_module = createClientModule(b, mod, target, optimize, "examples/sample.zig"),
     });
 
     const install_exe = b.addInstallArtifact(exe, .{});
@@ -48,14 +41,7 @@ pub fn build(b: *std.Build) void {
 
     inline for (valid_tests) |path| {
         const valid_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(path),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "parsz", .module = mod },
-                },
-            }),
+            .root_module = createClientModule(b, mod, target, optimize, path),
         });
         comptime_test_step.dependOn(&b.addRunArtifact(valid_test).step);
     }
@@ -108,16 +94,26 @@ pub fn build(b: *std.Build) void {
 
     inline for (error_tests) |test_case| {
         const err_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(test_case[0]),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "parsz", .module = mod },
-                },
-            }),
+            .root_module = createClientModule(b, mod, target, optimize, test_case[0]),
         });
         err_test.expect_errors = .{ .contains = test_case[1] };
         comptime_test_step.dependOn(&err_test.step);
     }
+}
+
+fn createClientModule(
+    b: *std.Build,
+    parsz_mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    path: []const u8,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(path),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "parsz", .module = parsz_mod },
+        },
+    });
 }
