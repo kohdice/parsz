@@ -62,13 +62,22 @@ pub fn main() !void {
         error.TooManyPositionals,
         error.DuplicateArg,
         => {
-            if (diagnostic.arg_name.len > 0) {
+            if (diagnostic.flag_name.len > 0 and diagnostic.arg_name.len > 0) {
+                // Known option/flag: show the flag the user typed (e.g., "--count", "-n")
+                std.debug.print("Error: option '{s}': {s}", .{ diagnostic.flag_name, @errorName(err) });
+                if (diagnostic.provided_value.len > 0) {
+                    std.debug.print(" (got '{s}')", .{diagnostic.provided_value});
+                }
+                std.debug.print("\n", .{});
+            } else if (diagnostic.arg_name.len > 0) {
+                // Positional argument error (no flag_name)
                 std.debug.print("Error: argument '{s}': {s}", .{ diagnostic.arg_name, @errorName(err) });
                 if (diagnostic.provided_value.len > 0) {
                     std.debug.print(" (got '{s}')", .{diagnostic.provided_value});
                 }
                 std.debug.print("\n", .{});
             } else if (diagnostic.flag_name.len > 0) {
+                // Unknown flag (no arg_name, only flag_name)
                 std.debug.print("Error: unknown flag '{s}'\n", .{diagnostic.flag_name});
             } else {
                 std.debug.print("Parse error: {s}\n", .{@errorName(err)});
