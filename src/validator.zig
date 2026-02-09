@@ -241,6 +241,15 @@ fn flagDisplayName(comptime arg: Arg) []const u8 {
     return "";
 }
 
+/// Convert a RawResult's ArrayListUnmanaged field into a typed owned slice for ParseResult.
+///
+/// For string type: ownership of the backing array is transferred from the raw list
+/// to the returned slice via toOwnedSlice(). On success the raw list is emptied;
+/// on OOM the raw list retains its buffer for cleanup by deinitRawResult().
+///
+/// For non-string types: a new typed slice is allocated and each element is converted
+/// via convertValue(). The raw list's buffer is NOT transferred and will be freed
+/// by deinitRawResult() after validate() returns.
 fn validateMultipleField(
     comptime arg: Arg,
     allocator: std.mem.Allocator,
@@ -1314,4 +1323,48 @@ test "validator: dot-prefixed float overflow → ValueOutOfRange" {
     var tok = Tokenizer{ .args = &.{"--ratio=.1e999"} };
     var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
     try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, float_cmd, &raw, null));
+}
+
+test "validator: plus-prefixed integer accepted" {
+    // +42 is a valid integer with explicit positive sign
+    var tok = Tokenizer{ .args = &.{"--num=+42"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+    const result = try validate(testing.allocator, int_cmd, &raw, null);
+    try testing.expectEqual(@as(i64, 42), result.num);
+}
+
+test "validator: plus-prefixed float accepted" {
+    // +3.14 is a valid float with explicit positive sign
+    var tok = Tokenizer{ .args = &.{"--ratio=+3.14"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+    const result = try validate(testing.allocator, float_cmd, &raw, null);
+    try testing.expectApproxEqAbs(@as(f64, 3.14), result.ratio, 0.001);
+}
+
+test "validator: f32 non-finite literals rejected" {
+    // nan → InvalidValue
+    {
+        var tok = Tokenizer{ .args = &.{"--val=nan"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, f32_cmd, &raw, null));
+    }
+    // inf → InvalidValue
+    {
+        var tok = Tokenizer{ .args = &.{"--val=inf"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, f32_cmd, &raw, null));
+    }
+    // hex float → InvalidValue
+    {
+        var tok = Tokenizer{ .args = &.{"--val=0x1.0p10"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, f32_cmd, &raw, null));
+    }
+}
+
+test "validator: f32 dot-prefixed overflow → ValueOutOfRange" {
+    // .1e40 = 1e39, which overflows f32 range (f32 max ≈ 3.4e38)
+    var tok = Tokenizer{ .args = &.{"--val=.1e40"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, f32_cmd, &raw, null));
 }
