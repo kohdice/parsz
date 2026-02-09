@@ -151,7 +151,7 @@ fn validateField(
 /// (integer overflow, float overflow to infinity).
 /// T is constrained to integer types (i8..i64, u8..u64), float types (f32, f64),
 /// bool, or []const u8 by valueTypeToZigType, making the trailing @compileError
-/// unreachable in practice.
+/// unreachable by construction.
 ///
 /// For integers: only base-10 decimal notation is accepted (no hex, octal, or binary prefixes).
 /// Range is automatically enforced by std.fmt.parseInt(T, ...).
@@ -184,16 +184,14 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
                 error.InvalidCharacter => ParseError.InvalidValue,
             };
             if (!std.math.isFinite(val)) {
-                // Distinguish non-finite literals (inf/nan) from numeric overflow.
-                // "inf", "nan", etc. are genuinely invalid CLI input → InvalidValue.
-                // Decimal numbers that overflow to infinity (e.g., "1e999") exceed
-                // the type range → ValueOutOfRange, consistent with integer overflow.
+                // After sign stripping, non-finite literals (inf, nan) start with a letter,
+                // while numeric overflows (1e999) start with a digit. Hex floats are already
+                // rejected above, so only these two categories reach this point.
                 const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
-                if (s.len > 0) switch (s[0]) {
-                    'i', 'I', 'n', 'N' => return ParseError.InvalidValue,
-                    else => {},
-                };
-                return ParseError.ValueOutOfRange;
+                return if (s.len > 0 and std.ascii.isDigit(s[0]))
+                    ParseError.ValueOutOfRange
+                else
+                    ParseError.InvalidValue;
             }
             return val;
         },
