@@ -148,52 +148,57 @@ fn validateField(
 /// Convert a runtime string value to its typed form.
 /// Returns ParseError.InvalidValue on parse failure, or
 /// ParseError.ValueOutOfRange when a numeric value exceeds the target type's range
-/// (integer overflow for i64, float overflow to infinity for f64).
-/// T is constrained to {[]const u8, i64, f64, bool} by valueTypeToZigType,
-/// making the trailing @compileError unreachable in practice.
+/// (integer overflow, float overflow to infinity).
+/// T is constrained to integer types (i8..i64, u8..u64), float types (f32, f64),
+/// bool, or []const u8 by valueTypeToZigType, making the trailing @compileError
+/// unreachable in practice.
 ///
-/// For i64: only base-10 decimal notation is accepted (no hex, octal, or binary prefixes).
+/// For integers: only base-10 decimal notation is accepted (no hex, octal, or binary prefixes).
+/// Range is automatically enforced by std.fmt.parseInt(T, ...).
 ///
-/// For f64: hex float literals (0x...) and non-finite literals (nan, inf) are
-/// rejected as InvalidValue. Decimal values that overflow to infinity (e.g., 1e999)
+/// For floats: hex float literals (0x...) and non-finite literals (nan, inf) are
+/// rejected as InvalidValue. Decimal values that overflow to infinity
 /// are rejected as ValueOutOfRange.
 ///
 /// Note: For string type, an empty string (e.g., --output=) is accepted as-is.
 /// This is intentional — an empty string is a valid string value.
 fn convertValue(comptime T: type, str: []const u8) ParseError!T {
     if (T == []const u8) return str;
-    if (T == i64) return std.fmt.parseInt(i64, str, 10) catch |err| return switch (err) {
-        error.Overflow => ParseError.ValueOutOfRange,
-        error.InvalidCharacter => ParseError.InvalidValue,
-    };
-    if (T == f64) {
-        // Reject hex float literals (0x1.fp10, -0xFF, etc.) — CLI arguments
-        // should use decimal notation only. std.fmt.parseFloat accepts hex
-        // floats per IEEE 754, but that format is not user-friendly for CLI input.
-        if (definitions.isHexFloat(str)) {
-            return ParseError.InvalidValue;
-        }
-        const val = std.fmt.parseFloat(f64, str) catch |err| return switch (err) {
-            error.InvalidCharacter => ParseError.InvalidValue,
-        };
-        if (!std.math.isFinite(val)) {
-            // Distinguish non-finite literals (inf/nan) from numeric overflow.
-            // "inf", "nan", etc. are genuinely invalid CLI input → InvalidValue.
-            // Decimal numbers that overflow to infinity (e.g., "1e999") exceed
-            // the f64 range → ValueOutOfRange, consistent with integer overflow.
-            const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
-            if (s.len > 0) switch (s[0]) {
-                'i', 'I', 'n', 'N' => return ParseError.InvalidValue,
-                else => {},
-            };
-            return ParseError.ValueOutOfRange;
-        }
-        return val;
-    }
     if (T == bool) return definitions.parseBool(str) catch |err| return switch (err) {
         error.InvalidBool => ParseError.InvalidValue,
     };
-    @compileError("convertValue: unsupported type " ++ @typeName(T));
+
+    switch (@typeInfo(T)) {
+        .int => return std.fmt.parseInt(T, str, 10) catch |err| return switch (err) {
+            error.Overflow => ParseError.ValueOutOfRange,
+            error.InvalidCharacter => ParseError.InvalidValue,
+        },
+        .float => {
+            // Reject hex float literals (0x1.fp10, -0xFF, etc.) — CLI arguments
+            // should use decimal notation only. std.fmt.parseFloat accepts hex
+            // floats per IEEE 754, but that format is not user-friendly for CLI input.
+            if (definitions.isHexFloat(str)) {
+                return ParseError.InvalidValue;
+            }
+            const val = std.fmt.parseFloat(T, str) catch |err| return switch (err) {
+                error.InvalidCharacter => ParseError.InvalidValue,
+            };
+            if (!std.math.isFinite(val)) {
+                // Distinguish non-finite literals (inf/nan) from numeric overflow.
+                // "inf", "nan", etc. are genuinely invalid CLI input → InvalidValue.
+                // Decimal numbers that overflow to infinity (e.g., "1e999") exceed
+                // the type range → ValueOutOfRange, consistent with integer overflow.
+                const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
+                if (s.len > 0) switch (s[0]) {
+                    'i', 'I', 'n', 'N' => return ParseError.InvalidValue,
+                    else => {},
+                };
+                return ParseError.ValueOutOfRange;
+            }
+            return val;
+        },
+        else => @compileError("convertValue: unsupported type " ++ @typeName(T)),
+    }
 }
 
 /// Comptime counterpart of convertValue — converts a default value string
@@ -206,23 +211,26 @@ fn convertDefault(
     comptime def: []const u8,
 ) T {
     if (T == []const u8) return def;
-    if (T == i64) return std.fmt.parseInt(i64, def, 10) catch
-        @compileError("convertDefault: '" ++ def ++ "' is not a valid i64 (invariant violation: validateDefault should have caught this)");
-    if (T == f64) {
-        // Defense-in-depth: reject hex float notation and non-finite values.
-        // validateDefault() should already catch these, but guard here too
-        // in case the two functions drift apart.
-        if (definitions.isHexFloat(def))
-            @compileError("convertDefault: '" ++ def ++ "' uses hex float notation (invariant violation: validateDefault should have caught this)");
-        const val = std.fmt.parseFloat(f64, def) catch
-            @compileError("convertDefault: '" ++ def ++ "' is not a valid f64 (invariant violation: validateDefault should have caught this)");
-        if (!std.math.isFinite(val))
-            @compileError("convertDefault: '" ++ def ++ "' is not a finite f64 (invariant violation: validateDefault should have caught this)");
-        return val;
-    }
     if (T == bool) return definitions.parseBool(def) catch
         @compileError("convertDefault: '" ++ def ++ "' is not a valid bool (invariant violation: validateDefault should have caught this)");
-    @compileError("convertDefault: unsupported type " ++ @typeName(T));
+
+    switch (@typeInfo(T)) {
+        .int => return std.fmt.parseInt(T, def, 10) catch
+            @compileError("convertDefault: '" ++ def ++ "' is not a valid " ++ @typeName(T) ++ " (invariant violation: validateDefault should have caught this)"),
+        .float => {
+            // Defense-in-depth: reject hex float notation and non-finite values.
+            // validateDefault() should already catch these, but guard here too
+            // in case the two functions drift apart.
+            if (definitions.isHexFloat(def))
+                @compileError("convertDefault: '" ++ def ++ "' uses hex float notation (invariant violation: validateDefault should have caught this)");
+            const val = std.fmt.parseFloat(T, def) catch
+                @compileError("convertDefault: '" ++ def ++ "' is not a valid " ++ @typeName(T) ++ " (invariant violation: validateDefault should have caught this)");
+            if (!std.math.isFinite(val))
+                @compileError("convertDefault: '" ++ def ++ "' is not a finite " ++ @typeName(T) ++ " (invariant violation: validateDefault should have caught this)");
+            return val;
+        },
+        else => @compileError("convertDefault: unsupported type " ++ @typeName(T)),
+    }
 }
 
 /// Return a display name for the flag/option in diagnostic messages.
@@ -314,7 +322,7 @@ const test_cmd = Command{
     .args = &.{
         .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
         .{ .name = "output", .kind = .option, .short = 'o', .long = "output", .default = "out.txt" },
-        .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+        .{ .name = "count", .kind = .option, .value_type = .i64, .long = "count", .required = true },
         .{ .name = "input", .kind = .positional, .required = true },
     },
 };
@@ -367,7 +375,7 @@ test "validator: invalid integer → error" {
 const float_cmd = Command{
     .name = "fc",
     .args = &.{
-        .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .required = true },
+        .{ .name = "ratio", .kind = .option, .value_type = .f64, .long = "ratio", .required = true },
     },
 };
 
@@ -381,7 +389,7 @@ const bool_cmd = Command{
 const int_cmd = Command{
     .name = "ic",
     .args = &.{
-        .{ .name = "num", .kind = .option, .value_type = .integer, .long = "num", .required = true },
+        .{ .name = "num", .kind = .option, .value_type = .i64, .long = "num", .required = true },
     },
 };
 
@@ -450,7 +458,7 @@ test "validator: multiple string positional" {
 const multi_int_cmd = Command{
     .name = "mi",
     .args = &.{
-        .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+        .{ .name = "nums", .kind = .option, .value_type = .i64, .long = "num", .multiple = true },
     },
 };
 
@@ -650,8 +658,8 @@ test "validator: empty string for string → success" {
 const two_multi_cmd = Command{
     .name = "tm",
     .args = &.{
-        .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
-        .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
+        .{ .name = "nums", .kind = .option, .value_type = .i64, .long = "num", .multiple = true },
+        .{ .name = "ratios", .kind = .option, .value_type = .f64, .long = "ratio", .multiple = true },
     },
 };
 
@@ -668,7 +676,7 @@ test "validator: errdefer safety with multiple fields on partial failure" {
 const multi_short_only_cmd = Command{
     .name = "mso",
     .args = &.{
-        .{ .name = "nums", .kind = .option, .value_type = .integer, .short = 'n', .multiple = true },
+        .{ .name = "nums", .kind = .option, .value_type = .i64, .short = 'n', .multiple = true },
     },
 };
 
@@ -688,7 +696,7 @@ test "validator: diagnostic on multiple positional InvalidValue has empty flag_n
     const multi_int_pos_cmd = Command{
         .name = "mip",
         .args = &.{
-            .{ .name = "nums", .kind = .positional, .value_type = .integer, .multiple = true },
+            .{ .name = "nums", .kind = .positional, .value_type = .i64, .multiple = true },
         },
     };
     var diagnostic: Diagnostic = .{};
@@ -838,7 +846,7 @@ test "validator: multiple integer positional" {
     const cmd = Command{
         .name = "mip",
         .args = &.{
-            .{ .name = "nums", .kind = .positional, .value_type = .integer, .multiple = true },
+            .{ .name = "nums", .kind = .positional, .value_type = .i64, .multiple = true },
         },
     };
     // Use "--" to pass negative numbers as positional arguments
@@ -859,7 +867,7 @@ test "validator: multiple float positional" {
     const cmd = Command{
         .name = "mfp",
         .args = &.{
-            .{ .name = "vals", .kind = .positional, .value_type = .float, .multiple = true },
+            .{ .name = "vals", .kind = .positional, .value_type = .f64, .multiple = true },
         },
     };
     // Use "--" to pass negative numbers as positional arguments
@@ -942,7 +950,7 @@ test "validator: multiple float ValueOutOfRange" {
     const cmd = Command{
         .name = "mf",
         .args = &.{
-            .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
+            .{ .name = "ratios", .kind = .option, .value_type = .f64, .long = "ratio", .multiple = true },
         },
     };
     var diagnostic: Diagnostic = .{};
@@ -977,7 +985,7 @@ test "validator: diagnostic on MissingRequired for short-only option" {
     const short_only_req_cmd = Command{
         .name = "sor",
         .args = &.{
-            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+            .{ .name = "num", .kind = .option, .value_type = .i64, .short = 'n', .required = true },
         },
     };
     var diagnostic: Diagnostic = .{};
@@ -988,4 +996,98 @@ test "validator: diagnostic on MissingRequired for short-only option" {
     try testing.expectError(ParseError.MissingRequired, validate(testing.allocator, short_only_req_cmd, &raw, &diagnostic));
     try testing.expectEqualStrings("num", diagnostic.arg_name);
     try testing.expectEqualStrings("n", diagnostic.flag_name);
+}
+
+// --- Narrow numeric type tests ---
+
+const u8_cmd = Command{
+    .name = "u8c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .u8, .long = "val", .required = true },
+    },
+};
+
+test "validator: u8 boundary values" {
+    // 255 is max u8
+    {
+        var tok = Tokenizer{ .args = &.{"--val=255"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u8_cmd, null);
+        const result = try validate(testing.allocator, u8_cmd, &raw, null);
+        try testing.expectEqual(@as(u8, 255), result.val);
+    }
+    // 0 is min u8
+    {
+        var tok = Tokenizer{ .args = &.{"--val=0"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u8_cmd, null);
+        const result = try validate(testing.allocator, u8_cmd, &raw, null);
+        try testing.expectEqual(@as(u8, 0), result.val);
+    }
+    // 256 overflows u8
+    {
+        var tok = Tokenizer{ .args = &.{"--val=256"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u8_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u8_cmd, &raw, null));
+    }
+    // -1 overflows u8 (unsigned cannot be negative)
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-1"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u8_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u8_cmd, &raw, null));
+    }
+}
+
+const i8_cmd = Command{
+    .name = "i8c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .i8, .long = "val", .required = true },
+    },
+};
+
+test "validator: i8 boundary values" {
+    // 127 is max i8
+    {
+        var tok = Tokenizer{ .args = &.{"--val=127"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i8_cmd, null);
+        const result = try validate(testing.allocator, i8_cmd, &raw, null);
+        try testing.expectEqual(@as(i8, 127), result.val);
+    }
+    // -128 is min i8
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-128"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i8_cmd, null);
+        const result = try validate(testing.allocator, i8_cmd, &raw, null);
+        try testing.expectEqual(@as(i8, -128), result.val);
+    }
+    // 128 overflows i8
+    {
+        var tok = Tokenizer{ .args = &.{"--val=128"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i8_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, i8_cmd, &raw, null));
+    }
+    // -129 overflows i8
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-129"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i8_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, i8_cmd, &raw, null));
+    }
+}
+
+const f32_cmd = Command{
+    .name = "f32c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .f32, .long = "val", .required = true },
+    },
+};
+
+test "validator: f32 basic conversion" {
+    var tok = Tokenizer{ .args = &.{"--val=3.14"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
+    const result = try validate(testing.allocator, f32_cmd, &raw, null);
+    try testing.expectApproxEqAbs(@as(f32, 3.14), result.val, 0.001);
+}
+
+test "validator: f32 overflow → ValueOutOfRange" {
+    var tok = Tokenizer{ .args = &.{"--val=1e39"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, f32_cmd, &raw, null));
 }
