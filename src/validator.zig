@@ -184,14 +184,15 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
                 error.InvalidCharacter => ParseError.InvalidValue,
             };
             if (!std.math.isFinite(val)) {
-                // After sign stripping, non-finite literals (inf, nan) start with a letter,
-                // while numeric overflows (1e999) start with a digit. Hex floats are already
-                // rejected above, so only these two categories reach this point.
-                const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
-                return if (s.len > 0 and std.ascii.isDigit(s[0]))
-                    ParseError.ValueOutOfRange
+                // After sign stripping, non-finite literals (inf, nan, Infinity, NaN)
+                // start with a letter, while numeric overflows (1e999, .1e999) start
+                // with a digit or dot. Hex floats are already rejected above, so only
+                // these two categories reach this point.
+                const s = definitions.stripLeadingSign(str);
+                return if (s.len > 0 and std.ascii.isAlphabetic(s[0]))
+                    ParseError.InvalidValue
                 else
-                    ParseError.InvalidValue;
+                    ParseError.ValueOutOfRange;
             }
             return val;
         },
