@@ -298,6 +298,7 @@ pub fn deinitRawResult(
             @field(result, arg.name).deinit(allocator);
         }
     }
+    result.* = undefined;
 }
 
 const testing = std.testing;
