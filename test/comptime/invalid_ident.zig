@@ -9,5 +9,5 @@ comptime {
             .{ .name = "123invalid", .kind = .option, .long = "test" }, // Invalid: starts with digit
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

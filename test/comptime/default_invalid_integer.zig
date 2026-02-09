@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_option", .kind = .option, .value_type = .integer, .long = "count", .default = "not_a_number" }, // Invalid: not a valid integer
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

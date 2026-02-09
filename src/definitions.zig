@@ -2,7 +2,6 @@
 
 const std = @import("std");
 
-/// Argument kind.
 pub const ArgKind = enum {
     /// Boolean option without value (e.g., -v, --verbose)
     flag,
@@ -12,17 +11,34 @@ pub const ArgKind = enum {
     positional,
 };
 
-/// Value type for arguments.
 pub const ValueType = enum {
+    /// Zig type: i64
     integer,
+    /// Zig type: f64
     float,
+    /// Zig type: bool
     boolean,
+    /// Zig type: []const u8
     string,
 };
 
 /// Single argument definition.
+///
+/// Valid field combinations per `ArgKind`:
+/// - flag:       short/long (at least one), value_type must be .boolean,
+///               required/default/multiple are all forbidden
+/// - option:     short/long (at least one required); value_type, required, default, multiple are allowed
+/// - positional: value_type, required, default, multiple (short/long forbidden)
+///
+/// Cross-field constraints (apply to all kinds):
+/// - required and default cannot both be set
+/// - multiple and default cannot both be set
 pub const Arg = struct {
-    /// Valid Zig identifier (required)
+    /// Field name for ParseResult (required).
+    /// Must match the Zig identifier character pattern: [a-zA-Z_][a-zA-Z0-9_]*
+    ///
+    /// Zig keywords (e.g., "type", "error") are also accepted. When a keyword is used,
+    /// access the result field via `result.@"type"` or `@field(result, "type")`.
     name: []const u8,
     kind: ArgKind,
     value_type: ValueType = .string,
@@ -31,22 +47,34 @@ pub const Arg = struct {
     /// Short option character (e.g., 'o' → -o)
     short: ?u8 = null,
     required: bool = false,
-    /// Default value (string format)
+    /// Default value as a string literal.
+    /// For non-string value_type (integer, float, boolean), the string is
+    /// validated at comptime to ensure it can be parsed to the target type.
     default: ?[]const u8 = null,
+    /// Help text for this argument. Currently unused; intended for future help/usage message generation.
     help: ?[]const u8 = null,
-    /// Allow multiple occurrences
+    /// When true, this argument accepts multiple values.
+    /// The corresponding ParseResult field becomes `[]const T` (heap-allocated when non-empty).
+    /// The caller must call `deinit()` to free the backing memory.
+    /// Cannot be combined with `default`. Flags cannot be multiple.
     multiple: bool = false,
 };
 
-/// Command definition holding multiple `Arg`s.
 pub const Command = struct {
     /// Command name (required, non-empty)
     name: []const u8,
+    /// Description of the command. Currently unused; intended for future help/usage message generation.
     about: ?[]const u8 = null,
+    /// Argument definitions for this command.
+    /// Ordering constraint for positionals: required positionals must come before
+    /// optional ones, and at most one `multiple` positional is allowed (must be last).
+    /// Names, short characters, and long names must be unique across all args.
     args: []const Arg = &.{},
 };
 
-/// Validate Arg at comptime.
+/// Validate a single Arg definition at comptime.
+/// Called automatically during RawResult/ParseResult generation;
+/// can also be called directly for early validation.
 pub fn validateArg(comptime arg: Arg) void {
     validateIdent(arg.name);
     validateKindRules(arg);
@@ -55,7 +83,9 @@ pub fn validateArg(comptime arg: Arg) void {
     validateDefault(arg);
 }
 
-/// Validate Command and all Args at comptime.
+/// Validate a Command definition and all its Args at comptime.
+/// Called automatically during RawResult/ParseResult generation;
+/// can also be called directly for early validation.
 pub fn validateCommand(comptime cmd: Command) void {
     if (cmd.name.len == 0) {
         @compileError("Invalid Command definition: name cannot be empty");
@@ -81,6 +111,7 @@ fn compileErrorInvalidDefinition(
     ));
 }
 
+/// Map a ValueType to the corresponding Zig type used in ParseResult fields.
 pub fn valueTypeToZigType(comptime value_type: ValueType) type {
     return switch (value_type) {
         .integer => i64,
@@ -94,7 +125,8 @@ pub const ParseBoolError = error{
     InvalidBool,
 };
 
-// Valid values: "true", "false", "1", "0" (case-insensitive)
+/// Parse a boolean string value.
+/// Valid values: "true"/"false" (case-insensitive), "1"/"0" (exact match).
 pub fn parseBool(value: []const u8) ParseBoolError!bool {
     return if (std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true"))
         true
@@ -102,6 +134,15 @@ pub fn parseBool(value: []const u8) ParseBoolError!bool {
         false
     else
         error.InvalidBool;
+}
+
+/// Check whether a string has a hex float prefix (0x/0X, with optional leading sign).
+/// This is a prefix-only check — it does not validate the full hex float syntax.
+/// Used by comptime validation (validateDefault, convertDefault) and runtime conversion
+/// (convertValue) to reject hex float notation in CLI float arguments.
+pub fn isHexFloat(str: []const u8) bool {
+    const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
+    return s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X');
 }
 
 fn validateIdent(comptime name: []const u8) void {
@@ -114,7 +155,7 @@ fn validateIdent(comptime name: []const u8) void {
     }
 
     for (name[1..]) |c| {
-        if (!(std.ascii.isAlphabetic(c) or std.ascii.isDigit(c) or c == '_')) {
+        if (!(std.ascii.isAlphanumeric(c) or c == '_')) {
             compileErrorInvalidDefinition("Arg", name, error_msg, .{});
         }
     }
@@ -140,17 +181,17 @@ fn validateKindRules(comptime arg: Arg) void {
             }
 
             if (arg.short == null and arg.long == null) {
-                compileErrorInvalidDefinition("Arg", arg.name, "flag must have long or short.", .{});
+                compileErrorInvalidDefinition("Arg", arg.name, "flag must have long or short", .{});
             }
         },
         .option => {
             if (arg.short == null and arg.long == null) {
-                compileErrorInvalidDefinition("Arg", arg.name, "option must have long or short.", .{});
+                compileErrorInvalidDefinition("Arg", arg.name, "option must have long or short", .{});
             }
         },
         .positional => {
             if (arg.short != null or arg.long != null) {
-                compileErrorInvalidDefinition("Arg", arg.name, "positional cannot have long or short.", .{});
+                compileErrorInvalidDefinition("Arg", arg.name, "positional cannot have long or short", .{});
             }
         },
     }
@@ -191,19 +232,25 @@ fn validateNameFormats(comptime arg: Arg) void {
 }
 
 fn validateDefault(comptime arg: Arg) void {
-    if (arg.default == null) return;
-
-    const def = arg.default.?;
+    const def = arg.default orelse return;
     switch (arg.value_type) {
         .integer => {
-            _ = std.fmt.parseInt(i64, def, 10) catch {
-                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid integer", .{def});
+            _ = std.fmt.parseInt(i64, def, 10) catch |err| switch (err) {
+                error.Overflow => compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' overflows i64 range", .{def}),
+                error.InvalidCharacter => compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid integer", .{def}),
             };
         },
         .float => {
-            _ = std.fmt.parseFloat(f64, def) catch {
+            // Reject hex float literals for consistency with runtime convertValue.
+            if (isHexFloat(def)) {
+                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' must not use hex float notation", .{def});
+            }
+            const val = std.fmt.parseFloat(f64, def) catch {
                 compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
             };
+            if (!std.math.isFinite(val)) {
+                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' overflows f64 range", .{def});
+            }
         },
         .boolean => {
             _ = parseBool(def) catch {
@@ -221,29 +268,72 @@ fn validateArgUniqueness(comptime cmd: Command) void {
                 compileErrorInvalidDefinition("Command", cmd.name, "duplicate Arg.name '{s}'", .{arg_a.name});
             }
 
-            if (arg_a.short != null and arg_b.short != null and arg_a.short.? == arg_b.short.?) {
-                compileErrorInvalidDefinition(
-                    "Command",
-                    cmd.name,
-                    "duplicate Arg.short '-{c}' between '{s}' and '{s}'",
-                    .{ arg_a.short.?, arg_a.name, arg_b.name },
-                );
+            if (arg_a.short) |a_short| {
+                if (a_short == arg_b.short) {
+                    compileErrorInvalidDefinition(
+                        "Command",
+                        cmd.name,
+                        "duplicate Arg.short '-{c}' between '{s}' and '{s}'",
+                        .{ a_short, arg_a.name, arg_b.name },
+                    );
+                }
             }
 
-            if (arg_a.long != null and arg_b.long != null and std.mem.eql(u8, arg_a.long.?, arg_b.long.?)) {
-                compileErrorInvalidDefinition(
-                    "Command",
-                    cmd.name,
-                    "duplicate Arg.long '--{s}' between '{s}' and '{s}'",
-                    .{ arg_a.long.?, arg_a.name, arg_b.name },
-                );
+            if (arg_a.long) |a_long| {
+                if (arg_b.long) |b_long| {
+                    if (std.mem.eql(u8, a_long, b_long)) {
+                        compileErrorInvalidDefinition(
+                            "Command",
+                            cmd.name,
+                            "duplicate Arg.long '--{s}' between '{s}' and '{s}'",
+                            .{ a_long, arg_a.name, arg_b.name },
+                        );
+                    }
+                }
             }
         }
     }
 }
 
+test "parseBool: accepts valid boolean strings" {
+    try std.testing.expectEqual(true, try parseBool("true"));
+    try std.testing.expectEqual(true, try parseBool("TRUE"));
+    try std.testing.expectEqual(true, try parseBool("True"));
+    try std.testing.expectEqual(true, try parseBool("1"));
+    try std.testing.expectEqual(false, try parseBool("false"));
+    try std.testing.expectEqual(false, try parseBool("FALSE"));
+    try std.testing.expectEqual(false, try parseBool("False"));
+    try std.testing.expectEqual(false, try parseBool("0"));
+}
+
+test "parseBool: rejects invalid strings" {
+    try std.testing.expectError(error.InvalidBool, parseBool("yes"));
+    try std.testing.expectError(error.InvalidBool, parseBool("no"));
+    try std.testing.expectError(error.InvalidBool, parseBool("2"));
+    try std.testing.expectError(error.InvalidBool, parseBool(""));
+    try std.testing.expectError(error.InvalidBool, parseBool("truthy"));
+}
+
+test "isHexFloat: detects hex float literals" {
+    try std.testing.expect(isHexFloat("0x1.0p10"));
+    try std.testing.expect(isHexFloat("0X1.0p10"));
+    try std.testing.expect(isHexFloat("+0x1.0"));
+    try std.testing.expect(isHexFloat("-0x1.0"));
+    try std.testing.expect(isHexFloat("0xABC"));
+}
+
+test "isHexFloat: rejects non-hex strings" {
+    try std.testing.expect(!isHexFloat("1.5"));
+    try std.testing.expect(!isHexFloat("-1.5"));
+    try std.testing.expect(!isHexFloat("0"));
+    try std.testing.expect(!isHexFloat(""));
+    try std.testing.expect(!isHexFloat("x"));
+    try std.testing.expect(!isHexFloat("0b101"));
+}
+
 fn validatePositionalOrder(comptime cmd: Command) void {
     var found_multiple = false;
+    var found_optional = false;
     inline for (cmd.args) |arg| {
         if (arg.kind == .positional) {
             if (found_multiple) {
@@ -255,8 +345,20 @@ fn validatePositionalOrder(comptime cmd: Command) void {
                 );
             }
 
+            if (found_optional and arg.required) {
+                compileErrorInvalidDefinition(
+                    "Command",
+                    cmd.name,
+                    "required positional Arg '{s}' cannot come after an optional positional argument",
+                    .{arg.name},
+                );
+            }
+
             if (arg.multiple) {
                 found_multiple = true;
+            }
+            if (!arg.required and !arg.multiple) {
+                found_optional = true;
             }
         }
     }

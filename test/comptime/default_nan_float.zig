@@ -1,4 +1,4 @@
-//! Test: short must be alphanumeric (POSIX Guideline 3)
+//! Test: NaN is not a valid float default.
 
 const parsz = @import("parsz");
 
@@ -6,7 +6,7 @@ comptime {
     const cmd = parsz.Command{
         .name = "test",
         .args = &.{
-            .{ .name = "bad_option", .kind = .option, .short = '-' }, // Invalid: '-' is not alphanumeric
+            .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .default = "nan" },
         },
     };
     _ = parsz.ParseResult(cmd);

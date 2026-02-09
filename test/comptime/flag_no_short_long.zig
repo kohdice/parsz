@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_flag", .kind = .flag, .value_type = .boolean }, // Invalid: no long or short
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }

@@ -9,5 +9,5 @@ comptime {
             .{ .name = "bad_option", .kind = .option, .value_type = .boolean, .long = "enabled", .default = "yes" }, // Invalid: not a valid boolean
         },
     };
-    parsz.parse(undefined, &.{}, cmd);
+    _ = parsz.ParseResult(cmd);
 }
