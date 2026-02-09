@@ -178,6 +178,18 @@ pub fn isHexFloat(str: []const u8) bool {
     return s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X');
 }
 
+/// Check whether a string is a non-finite float literal (nan, inf, infinity),
+/// with optional leading sign. Case-insensitive.
+/// Used by convertValue (validator.zig) to reject non-finite literals **before**
+/// calling parseFloat, avoiding reliance on parseFloat's internal representation
+/// of inf/nan results.
+pub fn isNonFiniteLiteral(str: []const u8) bool {
+    const s = stripLeadingSign(str);
+    return std.ascii.eqlIgnoreCase(s, "nan") or
+        std.ascii.eqlIgnoreCase(s, "inf") or
+        std.ascii.eqlIgnoreCase(s, "infinity");
+}
+
 fn validateIdent(comptime name: []const u8) void {
     const error_msg = "name must be a valid Zig identifier";
     if (name.len == 0) compileErrorInvalidDefinition("Arg", "", error_msg, .{});
@@ -378,6 +390,34 @@ test "isHexFloat: detects hex float literals" {
     try std.testing.expect(isHexFloat("+0x1.0"));
     try std.testing.expect(isHexFloat("-0x1.0"));
     try std.testing.expect(isHexFloat("0xABC"));
+}
+
+test "isNonFiniteLiteral: detects non-finite float literals" {
+    try std.testing.expect(isNonFiniteLiteral("nan"));
+    try std.testing.expect(isNonFiniteLiteral("NaN"));
+    try std.testing.expect(isNonFiniteLiteral("NAN"));
+    try std.testing.expect(isNonFiniteLiteral("inf"));
+    try std.testing.expect(isNonFiniteLiteral("Inf"));
+    try std.testing.expect(isNonFiniteLiteral("INF"));
+    try std.testing.expect(isNonFiniteLiteral("infinity"));
+    try std.testing.expect(isNonFiniteLiteral("Infinity"));
+    try std.testing.expect(isNonFiniteLiteral("INFINITY"));
+    try std.testing.expect(isNonFiniteLiteral("+inf"));
+    try std.testing.expect(isNonFiniteLiteral("-inf"));
+    try std.testing.expect(isNonFiniteLiteral("+nan"));
+    try std.testing.expect(isNonFiniteLiteral("-nan"));
+    try std.testing.expect(isNonFiniteLiteral("-Infinity"));
+    try std.testing.expect(isNonFiniteLiteral("+Infinity"));
+}
+
+test "isNonFiniteLiteral: rejects non-literal strings" {
+    try std.testing.expect(!isNonFiniteLiteral("1.5"));
+    try std.testing.expect(!isNonFiniteLiteral("-1.5"));
+    try std.testing.expect(!isNonFiniteLiteral("0"));
+    try std.testing.expect(!isNonFiniteLiteral(""));
+    try std.testing.expect(!isNonFiniteLiteral("infinite"));
+    try std.testing.expect(!isNonFiniteLiteral("nana"));
+    try std.testing.expect(!isNonFiniteLiteral("information"));
 }
 
 test "isHexFloat: rejects non-hex strings" {
