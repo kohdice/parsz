@@ -164,9 +164,7 @@ fn validateField(
 /// This is intentional — an empty string is a valid string value.
 fn convertValue(comptime T: type, str: []const u8) ParseError!T {
     if (T == []const u8) return str;
-    if (T == bool) return definitions.parseBool(str) catch |err| return switch (err) {
-        error.InvalidBool => ParseError.InvalidValue,
-    };
+    if (T == bool) return definitions.parseBool(str) catch return ParseError.InvalidValue;
 
     switch (@typeInfo(T)) {
         .int => return std.fmt.parseInt(T, str, 10) catch |err| return switch (err) {
@@ -186,9 +184,7 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
             if (definitions.isNonFiniteLiteral(str)) {
                 return ParseError.InvalidValue;
             }
-            const val = std.fmt.parseFloat(T, str) catch |err| return switch (err) {
-                error.InvalidCharacter => ParseError.InvalidValue,
-            };
+            const val = std.fmt.parseFloat(T, str) catch return ParseError.InvalidValue;
             // After pre-filtering literals above, any non-finite result here
             // is necessarily a numeric overflow (e.g., 1e999, .1e999).
             if (!std.math.isFinite(val)) {
