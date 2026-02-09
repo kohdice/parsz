@@ -11,6 +11,16 @@ pub const ArgKind = enum {
     positional,
 };
 
+/// Specifies the target Zig type for an argument's value.
+///
+/// Each variant maps to a Zig primitive type via `valueTypeToZigType()`:
+///   .i8-.i64   → i8-i64     (signed integers, base-10 only)
+///   .u8-.u64   → u8-u64     (unsigned integers, base-10 only)
+///   .f32/.f64  → f32/f64    (decimal floats only, hex/inf/nan rejected)
+///   .boolean   → bool       ("true"/"false" case-insensitive, "1"/"0")
+///   .string    → []const u8 (raw string, no conversion)
+///
+/// Default: .string (set via Arg.value_type default)
 pub const ValueType = enum {
     i8,
     i16,
@@ -44,7 +54,10 @@ pub const Arg = struct {
     /// Zig keywords (e.g., "type", "error") are also accepted. When a keyword is used,
     /// access the result field via `result.@"type"` or `@field(result, "type")`.
     name: []const u8,
+    /// Determines how this argument is parsed. Required, no default.
     kind: ArgKind,
+    /// Target type for the argument's value. Determines the field type in ParseResult.
+    /// Flags must use .boolean. Defaults to .string.
     value_type: ValueType = .string,
     /// Long option name (e.g., "output" → --output)
     long: ?[]const u8 = null,
