@@ -161,12 +161,20 @@ pub fn parseBool(value: []const u8) ParseBoolError!bool {
         error.InvalidBool;
 }
 
+/// Strip a leading '+' or '-' sign from a string, returning the remainder.
+/// If the string is empty or does not start with a sign, returns the original string unchanged.
+/// Used by isHexFloat (definitions.zig) and convertValue (validator.zig) to normalize
+/// numeric strings before prefix/literal classification.
+pub fn stripLeadingSign(str: []const u8) []const u8 {
+    return if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
+}
+
 /// Check whether a string has a hex float prefix (0x/0X, with optional leading sign).
 /// This is a prefix-only check — it does not validate the full hex float syntax.
 /// Used by comptime validation (validateDefault, convertDefault) and runtime conversion
 /// (convertValue) to reject hex float notation in CLI float arguments.
 pub fn isHexFloat(str: []const u8) bool {
-    const s = if (str.len > 0 and (str[0] == '+' or str[0] == '-')) str[1..] else str;
+    const s = stripLeadingSign(str);
     return s.len >= 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X');
 }
 
