@@ -86,7 +86,7 @@ test "integration: basic flag + option + positional" {
         .args = &.{
             .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
             .{ .name = "output", .kind = .option, .short = 'o', .long = "output", .default = "out.txt" },
-            .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+            .{ .name = "count", .kind = .option, .value_type = .i64, .long = "count", .required = true },
             .{ .name = "input", .kind = .positional, .required = true },
         },
     };
@@ -106,7 +106,7 @@ test "integration: defaults applied" {
         .name = "app",
         .args = &.{
             .{ .name = "output", .kind = .option, .long = "output", .default = "default.txt" },
-            .{ .name = "level", .kind = .option, .value_type = .integer, .long = "level", .default = "3" },
+            .{ .name = "level", .kind = .option, .value_type = .i64, .long = "level", .default = "3" },
         },
     };
 
@@ -209,7 +209,7 @@ test "integration: diagnostic provides error context" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+            .{ .name = "count", .kind = .option, .value_type = .i64, .long = "count", .required = true },
         },
     };
 
@@ -224,7 +224,7 @@ test "integration: negative integer as option value" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "offset", .kind = .option, .value_type = .integer, .long = "offset", .required = true },
+            .{ .name = "offset", .kind = .option, .value_type = .i64, .long = "offset", .required = true },
         },
     };
 
@@ -273,7 +273,7 @@ test "integration: short option with separate negative integer value" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "count", .kind = .option, .value_type = .integer, .short = 'c', .long = "count", .required = true },
+            .{ .name = "count", .kind = .option, .value_type = .i64, .short = 'c', .long = "count", .required = true },
         },
     };
 
@@ -288,7 +288,7 @@ test "integration: float default applied" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .default = "1.5" },
+            .{ .name = "ratio", .kind = .option, .value_type = .f64, .long = "ratio", .default = "1.5" },
         },
     };
 
@@ -364,7 +364,7 @@ test "integration: GNU-style interleaved options and positionals" {
         .args = &.{
             .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
             .{ .name = "output", .kind = .option, .long = "output", .required = true },
-            .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+            .{ .name = "count", .kind = .option, .value_type = .i64, .long = "count", .required = true },
             .{ .name = "input", .kind = .positional, .required = true },
         },
     };
@@ -428,7 +428,7 @@ test "integration: integer positional argument" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "port", .kind = .positional, .value_type = .integer, .required = true },
+            .{ .name = "port", .kind = .positional, .value_type = .i64, .required = true },
         },
     };
 
@@ -441,7 +441,7 @@ test "integration: float positional argument" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "threshold", .kind = .positional, .value_type = .float, .required = true },
+            .{ .name = "threshold", .kind = .positional, .value_type = .f64, .required = true },
         },
     };
 
@@ -454,7 +454,7 @@ test "integration: multiple float options" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
+            .{ .name = "ratios", .kind = .option, .value_type = .f64, .long = "ratio", .multiple = true },
         },
     };
 
@@ -472,7 +472,7 @@ test "integration: short-only option without long" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+            .{ .name = "num", .kind = .option, .value_type = .i64, .short = 'n', .required = true },
         },
     };
 
@@ -485,7 +485,7 @@ test "integration: short-only option with inline value" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+            .{ .name = "num", .kind = .option, .value_type = .i64, .short = 'n', .required = true },
         },
     };
 
@@ -498,7 +498,7 @@ test "integration: short option with inline negative integer value" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n', .required = true },
+            .{ .name = "num", .kind = .option, .value_type = .i64, .short = 'n', .required = true },
         },
     };
 
@@ -526,7 +526,7 @@ test "integration: diagnostic on multiple option InvalidValue includes flag_name
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+            .{ .name = "nums", .kind = .option, .value_type = .i64, .long = "num", .multiple = true },
         },
     };
 
@@ -772,7 +772,7 @@ test "integration: OutOfMemory does not leak (multiple integer option)" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+            .{ .name = "nums", .kind = .option, .value_type = .i64, .long = "num", .multiple = true },
         },
     };
     try testOomSafety(cmd, &.{ "--num=1", "--num=2", "--num=3" });
@@ -782,7 +782,7 @@ test "integration: OutOfMemory does not leak (two multiple fields, partial succe
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+            .{ .name = "nums", .kind = .option, .value_type = .i64, .long = "num", .multiple = true },
             .{ .name = "files", .kind = .positional, .multiple = true },
         },
     };
@@ -793,7 +793,7 @@ test "integration: OutOfMemory does not leak (multiple float option)" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "ratios", .kind = .option, .value_type = .float, .long = "ratio", .multiple = true },
+            .{ .name = "ratios", .kind = .option, .value_type = .f64, .long = "ratio", .multiple = true },
         },
     };
     try testOomSafety(cmd, &.{ "--ratio=1.5", "--ratio=2.0", "--ratio=3.14" });
@@ -814,7 +814,7 @@ test "integration: OutOfMemory does not leak (mixed multiple + required non-mult
         .name = "app",
         .args = &.{
             .{ .name = "output", .kind = .option, .long = "output", .required = true },
-            .{ .name = "nums", .kind = .option, .value_type = .integer, .long = "num", .multiple = true },
+            .{ .name = "nums", .kind = .option, .value_type = .i64, .long = "num", .multiple = true },
             .{ .name = "files", .kind = .positional, .multiple = true },
         },
     };
@@ -825,7 +825,7 @@ test "integration: ValueOutOfRange for integer overflow" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+            .{ .name = "count", .kind = .option, .value_type = .i64, .long = "count", .required = true },
         },
     };
 
@@ -841,7 +841,7 @@ test "integration: ValueOutOfRange for float overflow" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .required = true },
+            .{ .name = "ratio", .kind = .option, .value_type = .f64, .long = "ratio", .required = true },
         },
     };
 
@@ -857,7 +857,7 @@ test "integration: float non-finite literal rejected as InvalidValue" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .required = true },
+            .{ .name = "ratio", .kind = .option, .value_type = .f64, .long = "ratio", .required = true },
         },
     };
 
@@ -914,7 +914,7 @@ test "integration: non-string positional with default" {
     const cmd = Command{
         .name = "app",
         .args = &.{
-            .{ .name = "port", .kind = .positional, .value_type = .integer, .default = "8080" },
+            .{ .name = "port", .kind = .positional, .value_type = .i64, .default = "8080" },
         },
     };
 
@@ -969,4 +969,155 @@ test "integration: single required boolean positional" {
         const argv: []const [:0]const u8 = &.{"maybe"};
         try testing.expectError(ParseError.InvalidValue, parse(testing.allocator, argv, cmd, null));
     }
+}
+
+// --- Narrow numeric type integration tests ---
+
+test "integration: u8 option boundary values" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "port", .kind = .option, .value_type = .u8, .long = "port", .required = true },
+        },
+    };
+    // 255 succeeds
+    {
+        const argv: []const [:0]const u8 = &.{"--port=255"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqual(@as(u8, 255), result.port);
+    }
+    // 256 rejected
+    {
+        const argv: []const [:0]const u8 = &.{"--port=256"};
+        try testing.expectError(ParseError.ValueOutOfRange, parse(testing.allocator, argv, cmd, null));
+    }
+    // -1 rejected (unsigned)
+    {
+        const argv: []const [:0]const u8 = &.{"--port=-1"};
+        try testing.expectError(ParseError.ValueOutOfRange, parse(testing.allocator, argv, cmd, null));
+    }
+}
+
+test "integration: i8 option boundary values" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "val", .kind = .option, .value_type = .i8, .long = "val", .required = true },
+        },
+    };
+    // 127 and -128 succeed
+    {
+        const argv: []const [:0]const u8 = &.{"--val=127"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqual(@as(i8, 127), result.val);
+    }
+    {
+        const argv: []const [:0]const u8 = &.{"--val=-128"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqual(@as(i8, -128), result.val);
+    }
+    // 128 and -129 rejected
+    {
+        const argv: []const [:0]const u8 = &.{"--val=128"};
+        try testing.expectError(ParseError.ValueOutOfRange, parse(testing.allocator, argv, cmd, null));
+    }
+    {
+        const argv: []const [:0]const u8 = &.{"--val=-129"};
+        try testing.expectError(ParseError.ValueOutOfRange, parse(testing.allocator, argv, cmd, null));
+    }
+}
+
+test "integration: u16 positional" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "port", .kind = .positional, .value_type = .u16, .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"8080"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqual(@as(u16, 8080), result.port);
+}
+
+test "integration: u32 option with default" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "timeout", .kind = .option, .value_type = .u32, .long = "timeout", .default = "3000" },
+        },
+    };
+    // Default applied
+    {
+        const argv: []const [:0]const u8 = &.{};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqual(@as(u32, 3000), result.timeout);
+    }
+    // Override
+    {
+        const argv: []const [:0]const u8 = &.{"--timeout=5000"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectEqual(@as(u32, 5000), result.timeout);
+    }
+}
+
+test "integration: f32 option" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "ratio", .kind = .option, .value_type = .f32, .long = "ratio", .required = true },
+        },
+    };
+    // Normal value
+    {
+        const argv: []const [:0]const u8 = &.{"--ratio=3.14"};
+        const result = try parse(testing.allocator, argv, cmd, null);
+        try testing.expectApproxEqAbs(@as(f32, 3.14), result.ratio, 0.001);
+    }
+    // Overflow
+    {
+        const argv: []const [:0]const u8 = &.{"--ratio=1e39"};
+        try testing.expectError(ParseError.ValueOutOfRange, parse(testing.allocator, argv, cmd, null));
+    }
+}
+
+test "integration: i32 negative value" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "offset", .kind = .option, .value_type = .i32, .long = "offset", .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"--offset=-42"};
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expectEqual(@as(i32, -42), result.offset);
+}
+
+test "integration: multiple u8 option" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "bytes", .kind = .option, .value_type = .u8, .long = "byte", .multiple = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "--byte=0", "--byte=128", "--byte=255" };
+    var result = try parse(testing.allocator, argv, cmd, null);
+    defer deinit(cmd, &result, testing.allocator);
+
+    try testing.expectEqual(@as(usize, 3), result.bytes.len);
+    try testing.expectEqual(@as(u8, 0), result.bytes[0]);
+    try testing.expectEqual(@as(u8, 128), result.bytes[1]);
+    try testing.expectEqual(@as(u8, 255), result.bytes[2]);
+}
+
+test "integration: OutOfMemory does not leak (multiple u8 option)" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "bytes", .kind = .option, .value_type = .u8, .long = "byte", .multiple = true },
+        },
+    };
+    try testOomSafety(cmd, &.{ "--byte=1", "--byte=2", "--byte=3" });
 }

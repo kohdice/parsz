@@ -296,7 +296,7 @@ const test_cmd = Command{
     .args = &.{
         .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
         .{ .name = "output", .kind = .option, .short = 'o', .long = "output" },
-        .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .required = true },
+        .{ .name = "count", .kind = .option, .value_type = .i64, .long = "count", .required = true },
         .{ .name = "input", .kind = .positional, .required = true },
     },
 };
@@ -597,7 +597,7 @@ test "parser: diagnostic on duplicate short-only option" {
     const short_only_cmd = Command{
         .name = "so",
         .args = &.{
-            .{ .name = "num", .kind = .option, .value_type = .integer, .short = 'n' },
+            .{ .name = "num", .kind = .option, .value_type = .i64, .short = 'n' },
         },
     };
     var diagnostic: Diagnostic = .{};

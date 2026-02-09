@@ -25,7 +25,7 @@ const cmd = parsz.Command{
         .{
             .name = "count",
             .kind = .option,
-            .value_type = .integer,
+            .value_type = .i64,
             .long = "count",
             .default = "1",
             .help = "Repeat count",
