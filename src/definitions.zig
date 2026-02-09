@@ -294,7 +294,7 @@ fn validateDefault(comptime arg: Arg) void {
                 );
             }
         },
-        else => {},
+        else => @compileError("validateDefault: unsupported type " ++ @typeName(T)),
     }
 }
 
