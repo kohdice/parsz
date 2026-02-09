@@ -1,4 +1,4 @@
-//! Test: NaN is not a valid float default.
+//! Test: default value overflows u8 range.
 
 const parsz = @import("parsz");
 
@@ -6,7 +6,7 @@ comptime {
     const cmd = parsz.Command{
         .name = "test",
         .args = &.{
-            .{ .name = "ratio", .kind = .option, .value_type = .f64, .long = "ratio", .default = "nan" },
+            .{ .name = "val", .kind = .option, .value_type = .u8, .long = "val", .default = "256" },
         },
     };
     _ = parsz.ParseResult(cmd);

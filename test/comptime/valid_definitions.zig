@@ -9,7 +9,7 @@ comptime {
         .args = &.{
             .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
             .{ .name = "output", .kind = .option, .long = "output", .short = 'o', .default = "out.txt" },
-            .{ .name = "count", .kind = .option, .value_type = .integer, .long = "count", .default = "10" },
+            .{ .name = "count", .kind = .option, .value_type = .i64, .long = "count", .default = "10" },
             .{ .name = "config", .kind = .option, .long = "config", .required = true },
             .{ .name = "input", .kind = .positional, .required = true },
             .{ .name = "extras", .kind = .positional, .multiple = true, .required = true },

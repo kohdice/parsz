@@ -6,7 +6,7 @@ comptime {
     const cmd = parsz.Command{
         .name = "test",
         .args = &.{
-            .{ .name = "bad_option", .kind = .option, .value_type = .integer, .long = "count", .default = "not_a_number" }, // Invalid: not a valid integer
+            .{ .name = "bad_option", .kind = .option, .value_type = .i64, .long = "count", .default = "not_a_number" }, // Invalid: not a valid integer
         },
     };
     _ = parsz.ParseResult(cmd);

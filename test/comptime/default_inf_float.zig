@@ -6,7 +6,7 @@ comptime {
     const cmd = parsz.Command{
         .name = "test",
         .args = &.{
-            .{ .name = "ratio", .kind = .option, .value_type = .float, .long = "ratio", .default = "inf" },
+            .{ .name = "ratio", .kind = .option, .value_type = .f64, .long = "ratio", .default = "inf" },
         },
     };
     _ = parsz.ParseResult(cmd);

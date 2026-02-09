@@ -79,12 +79,19 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/long_invalid_char.zig", "long contains invalid character" },
 
         // Default value validation
-        .{ "test/comptime/default_invalid_integer.zig", "is not a valid integer" },
-        .{ "test/comptime/default_invalid_float.zig", "is not a valid float" },
+        .{ "test/comptime/default_invalid_integer.zig", "is not a valid i64" },
+        .{ "test/comptime/default_invalid_float.zig", "is not a valid f64" },
         .{ "test/comptime/default_nan_float.zig", "overflows f64 range" },
         .{ "test/comptime/default_inf_float.zig", "overflows f64 range" },
         .{ "test/comptime/default_hex_float.zig", "must not use hex float notation" },
         .{ "test/comptime/default_invalid_boolean.zig", "is not a valid boolean" },
+
+        // Narrow numeric type default validation
+        .{ "test/comptime/default_overflow_u8.zig", "overflows u8 range" },
+        .{ "test/comptime/default_overflow_i8.zig", "overflows i8 range" },
+        .{ "test/comptime/default_negative_unsigned.zig", "overflows u32 range" },
+        .{ "test/comptime/default_invalid_u16.zig", "is not a valid u16" },
+        .{ "test/comptime/default_overflow_f32.zig", "overflows f32 range" },
 
         // Cross-field constraints
         .{ "test/comptime/required_with_default.zig", "required and default cannot both be set" },
