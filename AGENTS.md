@@ -83,7 +83,7 @@ ParseResult (comptime-generated struct with typed fields)
 | `src/definitions.zig` | Type definitions (`Command`, `Arg`, `ArgKind`, `ValueType`), all comptime validation logic (`validateCommand`, `validateArg`)                                                              |
 | `src/tokenizer.zig`   | `Tokenizer` struct — lexical classification of argv elements into `Token` (tagged union: `.short`, `.long`, `.positional`, `.end_of_options`). Zero allocation.                            |
 | `src/parser.zig`      | `parseTokens` — binds tokens to `Arg` definitions. Generates `RawResult` (comptime struct, all fields are strings/bool). Handles short clusters, `--key=val` splitting.                    |
-| `src/validator.zig`   | `validate` — converts `RawResult` → `ParseResult`. Type conversion (`string→i64/f64/bool`), required checks, default application. Generates `ParseResult` (comptime struct, typed fields). |
+| `src/validator.zig`   | `validate` — converts `RawResult` → `ParseResult`. Type conversion (string to typed values: integers, floats, booleans), required checks, default application. Generates `ParseResult` (comptime struct, typed fields). |
 | `src/errors.zig`      | `ParseError` error set (runtime errors only)                                                                                                                                               |
 
 ### Key Design Patterns
@@ -106,7 +106,7 @@ Two result structs are generated via `@Type` based on the `Command` definition:
 | optional, no default (not `multiple`)        | `?T`                                  |
 | `multiple`                                   | `[]const T`                           |
 
-Where `T` is determined by `ValueType`: `.integer→i64`, `.float→f64`, `.boolean→bool`, `.string→[]const u8`.
+Where `T` is determined by `ValueType`: `.i8→i8`, `.i16→i16`, `.i32→i32`, `.i64→i64`, `.u8→u8`, `.u16→u16`, `.u32→u32`, `.u64→u64`, `.f32→f32`, `.f64→f64`, `.boolean→bool`, `.string→[]const u8`.
 
 ### Memory Ownership
 
