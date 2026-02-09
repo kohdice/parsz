@@ -50,6 +50,14 @@ pub fn RawResult(comptime cmd: Command) type {
     } });
 }
 
+/// Map an Arg definition to its RawResult field type.
+///
+/// - flag           → bool
+/// - single option/positional  → ?[]const u8
+/// - multiple option/positional → std.ArrayListUnmanaged([]const u8)
+///
+/// Used by RawResult (parser.zig) for struct generation and by
+/// validateField (validator.zig) for parameter type resolution.
 pub fn RawFieldType(comptime arg: Arg) type {
     return switch (arg.kind) {
         .flag => bool,
@@ -121,6 +129,9 @@ fn handleShortCluster(
     cluster: []const u8,
     diagnostic: ?*Diagnostic,
 ) (ParseError || error{OutOfMemory})!void {
+    // Invariant: Tokenizer never produces a zero-length short cluster.
+    // A "-" alone is classified as .positional, and "-x..." always yields len >= 1.
+    std.debug.assert(cluster.len > 0);
     var i: usize = 0;
     while (i < cluster.len) {
         const ch = cluster[i];
