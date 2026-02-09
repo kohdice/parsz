@@ -12,13 +12,17 @@ pub const ArgKind = enum {
 };
 
 pub const ValueType = enum {
-    /// Zig type: i64
-    integer,
-    /// Zig type: f64
-    float,
-    /// Zig type: bool
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    f32,
+    f64,
     boolean,
-    /// Zig type: []const u8
     string,
 };
 
@@ -48,7 +52,7 @@ pub const Arg = struct {
     short: ?u8 = null,
     required: bool = false,
     /// Default value as a string literal.
-    /// For non-string value_type (integer, float, boolean), the string is
+    /// For non-string value_type (i8..i64, u8..u64, f32, f64, boolean), the string is
     /// validated at comptime to ensure it can be parsed to the target type.
     default: ?[]const u8 = null,
     /// Help text for this argument. Currently unused; intended for future help/usage message generation.
@@ -114,8 +118,16 @@ fn compileErrorInvalidDefinition(
 /// Map a ValueType to the corresponding Zig type used in ParseResult fields.
 pub fn valueTypeToZigType(comptime value_type: ValueType) type {
     return switch (value_type) {
-        .integer => i64,
-        .float => f64,
+        .i8 => i8,
+        .i16 => i16,
+        .i32 => i32,
+        .i64 => i64,
+        .u8 => u8,
+        .u16 => u16,
+        .u32 => u32,
+        .u64 => u64,
+        .f32 => f32,
+        .f64 => f64,
         .boolean => bool,
         .string => []const u8,
     };
@@ -233,11 +245,31 @@ fn validateNameFormats(comptime arg: Arg) void {
 
 fn validateDefault(comptime arg: Arg) void {
     const def = arg.default orelse return;
-    switch (arg.value_type) {
-        .integer => {
-            _ = std.fmt.parseInt(i64, def, 10) catch |err| switch (err) {
-                error.Overflow => compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' overflows i64 range", .{def}),
-                error.InvalidCharacter => compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid integer", .{def}),
+    const T = valueTypeToZigType(arg.value_type);
+
+    if (T == []const u8) return;
+    if (T == bool) {
+        _ = parseBool(def) catch {
+            compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid boolean", .{def});
+        };
+        return;
+    }
+
+    switch (@typeInfo(T)) {
+        .int => {
+            _ = std.fmt.parseInt(T, def, 10) catch |err| switch (err) {
+                error.Overflow => compileErrorInvalidDefinition(
+                    "Arg",
+                    arg.name,
+                    "default '{s}' overflows " ++ @typeName(T) ++ " range",
+                    .{def},
+                ),
+                error.InvalidCharacter => compileErrorInvalidDefinition(
+                    "Arg",
+                    arg.name,
+                    "default '{s}' is not a valid " ++ @typeName(T),
+                    .{def},
+                ),
             };
         },
         .float => {
@@ -245,19 +277,24 @@ fn validateDefault(comptime arg: Arg) void {
             if (isHexFloat(def)) {
                 compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' must not use hex float notation", .{def});
             }
-            const val = std.fmt.parseFloat(f64, def) catch {
-                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid float", .{def});
+            const val = std.fmt.parseFloat(T, def) catch {
+                compileErrorInvalidDefinition(
+                    "Arg",
+                    arg.name,
+                    "default '{s}' is not a valid " ++ @typeName(T),
+                    .{def},
+                );
             };
             if (!std.math.isFinite(val)) {
-                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' overflows f64 range", .{def});
+                compileErrorInvalidDefinition(
+                    "Arg",
+                    arg.name,
+                    "default '{s}' overflows " ++ @typeName(T) ++ " range",
+                    .{def},
+                );
             }
         },
-        .boolean => {
-            _ = parseBool(def) catch {
-                compileErrorInvalidDefinition("Arg", arg.name, "default '{s}' is not a valid boolean", .{def});
-            };
-        },
-        .string => {},
+        else => {},
     }
 }
 
