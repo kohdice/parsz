@@ -735,15 +735,16 @@ test "integration: InvalidValue when flag receives a value via --flag=value" {
 //
 // These tests use FailingAllocator to verify that every allocation failure
 // point in the pipeline is handled without leaking memory. The pattern:
-// try each fail_index from 0 upward; on OOM the backing GeneralPurposeAllocator
-// (testing.allocator) detects any leak when it goes out of scope at test end;
-// on success, clean up and break.
+// try each fail_index from 0 upward; on OOM the FailingAllocator's backing
+// allocator (testing.allocator, a GeneralPurposeAllocator) triggers leak
+// detection at test end; on success, clean up and break.
 
 /// OOM-safety test helper: verifies that every allocation failure point
 /// in the pipeline is handled without leaking memory.
 fn testOomSafety(comptime cmd: Command, argv: []const [:0]const u8) !void {
+    const oom_test_max_iterations = 100;
     var fail_index: usize = 0;
-    while (fail_index < 100) : (fail_index += 1) {
+    while (fail_index < oom_test_max_iterations) : (fail_index += 1) {
         var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
         const alloc = failing.allocator();
 
@@ -755,7 +756,11 @@ fn testOomSafety(comptime cmd: Command, argv: []const [:0]const u8) !void {
         break;
     }
     // Sentinel: ensure at least one iteration succeeded before reaching the limit.
-    try testing.expect(fail_index < 100);
+    // If this fires, the parse never succeeded within oom_test_max_iterations
+    // attempts — either the limit is too low, or there is an infinite OOM loop.
+    if (fail_index >= oom_test_max_iterations) {
+        @panic("testOomSafety: parse never succeeded within oom_test_max_iterations attempts");
+    }
 }
 
 test "integration: OutOfMemory does not leak (multiple string positional)" {
