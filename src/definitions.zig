@@ -63,6 +63,8 @@ pub const Arg = struct {
     long: ?[]const u8 = null,
     /// Short option character (e.g., 'o' → -o)
     short: ?u8 = null,
+    /// When true, parsing fails with MissingRequired if this argument is not provided.
+    /// Mutually exclusive with `default`. Flags cannot be required.
     required: bool = false,
     /// Default value as a string literal.
     /// For non-string value_type (i8..i64, u8..u64, f32, f64, boolean), the string is
