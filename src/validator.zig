@@ -1162,3 +1162,156 @@ test "validator: i16 boundary values" {
         try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, i16_cmd, &raw, null));
     }
 }
+
+const i32_cmd = Command{
+    .name = "i32c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .i32, .long = "val", .required = true },
+    },
+};
+
+test "validator: i32 boundary values" {
+    // 2147483647 is max i32
+    {
+        var tok = Tokenizer{ .args = &.{"--val=2147483647"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i32_cmd, null);
+        const result = try validate(testing.allocator, i32_cmd, &raw, null);
+        try testing.expectEqual(@as(i32, 2147483647), result.val);
+    }
+    // -2147483648 is min i32
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-2147483648"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i32_cmd, null);
+        const result = try validate(testing.allocator, i32_cmd, &raw, null);
+        try testing.expectEqual(@as(i32, -2147483648), result.val);
+    }
+    // 2147483648 overflows i32
+    {
+        var tok = Tokenizer{ .args = &.{"--val=2147483648"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i32_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, i32_cmd, &raw, null));
+    }
+    // -2147483649 overflows i32
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-2147483649"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i32_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, i32_cmd, &raw, null));
+    }
+}
+
+const u16_cmd = Command{
+    .name = "u16c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .u16, .long = "val", .required = true },
+    },
+};
+
+test "validator: u16 boundary values" {
+    // 65535 is max u16
+    {
+        var tok = Tokenizer{ .args = &.{"--val=65535"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u16_cmd, null);
+        const result = try validate(testing.allocator, u16_cmd, &raw, null);
+        try testing.expectEqual(@as(u16, 65535), result.val);
+    }
+    // 0 is min u16
+    {
+        var tok = Tokenizer{ .args = &.{"--val=0"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u16_cmd, null);
+        const result = try validate(testing.allocator, u16_cmd, &raw, null);
+        try testing.expectEqual(@as(u16, 0), result.val);
+    }
+    // 65536 overflows u16
+    {
+        var tok = Tokenizer{ .args = &.{"--val=65536"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u16_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u16_cmd, &raw, null));
+    }
+    // -1 overflows u16 (unsigned cannot be negative)
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-1"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u16_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u16_cmd, &raw, null));
+    }
+}
+
+const u32_cmd = Command{
+    .name = "u32c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .u32, .long = "val", .required = true },
+    },
+};
+
+test "validator: u32 boundary values" {
+    // 4294967295 is max u32
+    {
+        var tok = Tokenizer{ .args = &.{"--val=4294967295"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u32_cmd, null);
+        const result = try validate(testing.allocator, u32_cmd, &raw, null);
+        try testing.expectEqual(@as(u32, 4294967295), result.val);
+    }
+    // 0 is min u32
+    {
+        var tok = Tokenizer{ .args = &.{"--val=0"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u32_cmd, null);
+        const result = try validate(testing.allocator, u32_cmd, &raw, null);
+        try testing.expectEqual(@as(u32, 0), result.val);
+    }
+    // 4294967296 overflows u32
+    {
+        var tok = Tokenizer{ .args = &.{"--val=4294967296"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u32_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u32_cmd, &raw, null));
+    }
+    // -1 overflows u32 (unsigned cannot be negative)
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-1"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u32_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u32_cmd, &raw, null));
+    }
+}
+
+test "validator: non-decimal integer prefixes are rejected" {
+    // std.fmt.parseInt with base=10 rejects hex, octal, and binary prefixes.
+    // This test documents and enforces that CLI integers are decimal-only.
+    const cases = .{ "0xFF", "0o77", "0b101" };
+    inline for (cases) |input| {
+        var tok = Tokenizer{ .args = &.{"--num=" ++ input} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
+    }
+}
+
+test "validator: sign-only string is rejected for integer and float" {
+    // A bare "-" or "+" without digits is a realistic user error (e.g., --count=-).
+    // Integer: bare sign
+    {
+        var tok = Tokenizer{ .args = &.{"--num=-"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
+    }
+    {
+        var tok = Tokenizer{ .args = &.{"--num=+"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, int_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, int_cmd, &raw, null));
+    }
+    // Float: bare sign
+    {
+        var tok = Tokenizer{ .args = &.{"--ratio=-"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, float_cmd, &raw, null));
+    }
+    {
+        var tok = Tokenizer{ .args = &.{"--ratio=+"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+        try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, float_cmd, &raw, null));
+    }
+}
+
+test "validator: dot-prefixed float overflow → ValueOutOfRange" {
+    // .1e999 is a valid decimal float syntax that overflows to infinity.
+    // It must return ValueOutOfRange, not InvalidValue.
+    var tok = Tokenizer{ .args = &.{"--ratio=.1e999"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, float_cmd, null);
+    try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, float_cmd, &raw, null));
+}
