@@ -1089,3 +1089,75 @@ test "validator: f32 overflow → ValueOutOfRange" {
     var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
     try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, f32_cmd, &raw, null));
 }
+
+const u64_cmd = Command{
+    .name = "u64c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .u64, .long = "val", .required = true },
+    },
+};
+
+test "validator: u64 boundary values" {
+    // 18446744073709551615 is max u64
+    {
+        var tok = Tokenizer{ .args = &.{"--val=18446744073709551615"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u64_cmd, null);
+        const result = try validate(testing.allocator, u64_cmd, &raw, null);
+        try testing.expectEqual(@as(u64, 18446744073709551615), result.val);
+    }
+    // 0 is min u64
+    {
+        var tok = Tokenizer{ .args = &.{"--val=0"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u64_cmd, null);
+        const result = try validate(testing.allocator, u64_cmd, &raw, null);
+        try testing.expectEqual(@as(u64, 0), result.val);
+    }
+    // 18446744073709551616 overflows u64
+    {
+        var tok = Tokenizer{ .args = &.{"--val=18446744073709551616"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u64_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u64_cmd, &raw, null));
+    }
+    // -1 overflows u64 (unsigned cannot be negative)
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-1"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, u64_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, u64_cmd, &raw, null));
+    }
+}
+
+const i16_cmd = Command{
+    .name = "i16c",
+    .args = &.{
+        .{ .name = "val", .kind = .option, .value_type = .i16, .long = "val", .required = true },
+    },
+};
+
+test "validator: i16 boundary values" {
+    // 32767 is max i16
+    {
+        var tok = Tokenizer{ .args = &.{"--val=32767"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i16_cmd, null);
+        const result = try validate(testing.allocator, i16_cmd, &raw, null);
+        try testing.expectEqual(@as(i16, 32767), result.val);
+    }
+    // -32768 is min i16
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-32768"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i16_cmd, null);
+        const result = try validate(testing.allocator, i16_cmd, &raw, null);
+        try testing.expectEqual(@as(i16, -32768), result.val);
+    }
+    // 32768 overflows i16
+    {
+        var tok = Tokenizer{ .args = &.{"--val=32768"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i16_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, i16_cmd, &raw, null));
+    }
+    // -32769 overflows i16
+    {
+        var tok = Tokenizer{ .args = &.{"--val=-32769"} };
+        var raw = try parser.parseTokens(testing.allocator, &tok, i16_cmd, null);
+        try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, i16_cmd, &raw, null));
+    }
+}
