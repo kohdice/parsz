@@ -180,19 +180,19 @@ fn convertValue(comptime T: type, str: []const u8) ParseError!T {
             if (definitions.isHexFloat(str)) {
                 return ParseError.InvalidValue;
             }
+            // Reject non-finite literals (nan, inf, infinity) before calling
+            // parseFloat. This avoids relying on parseFloat's internal
+            // representation to distinguish literals from numeric overflows.
+            if (definitions.isNonFiniteLiteral(str)) {
+                return ParseError.InvalidValue;
+            }
             const val = std.fmt.parseFloat(T, str) catch |err| return switch (err) {
                 error.InvalidCharacter => ParseError.InvalidValue,
             };
+            // After pre-filtering literals above, any non-finite result here
+            // is necessarily a numeric overflow (e.g., 1e999, .1e999).
             if (!std.math.isFinite(val)) {
-                // After sign stripping, non-finite literals (inf, nan, Infinity, NaN)
-                // start with a letter, while numeric overflows (1e999, .1e999) start
-                // with a digit or dot. Hex floats are already rejected above, so only
-                // these two categories reach this point.
-                const s = definitions.stripLeadingSign(str);
-                return if (s.len > 0 and std.ascii.isAlphabetic(s[0]))
-                    ParseError.InvalidValue
-                else
-                    ParseError.ValueOutOfRange;
+                return ParseError.ValueOutOfRange;
             }
             return val;
         },
