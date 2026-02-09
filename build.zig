@@ -92,6 +92,9 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/default_negative_unsigned.zig", "overflows u32 range" },
         .{ "test/comptime/default_invalid_u16.zig", "is not a valid u16" },
         .{ "test/comptime/default_overflow_f32.zig", "overflows f32 range" },
+        .{ "test/comptime/default_overflow_u64.zig", "overflows u64 range" },
+        .{ "test/comptime/default_overflow_i16.zig", "overflows i16 range" },
+        .{ "test/comptime/default_overflow_i32.zig", "overflows i32 range" },
 
         // Cross-field constraints
         .{ "test/comptime/required_with_default.zig", "required and default cannot both be set" },
