@@ -89,13 +89,33 @@ pub const Command = struct {
     /// optional ones, and at most one `multiple` positional is allowed (must be last).
     /// Names, short characters, and long names must be unique across all args.
     args: []const Arg = &.{},
+    /// Subcommand definitions for this command.
+    /// When non-empty, ParseResult gains a `subcommand` field (type depends on `subcommand_required`).
+    /// Positional args are forbidden when subcommands are defined (ambiguity).
+    /// Default `&.{}` ensures full backward compatibility.
+    subcommands: []const Command = &.{},
+    /// When true, parsing fails with MissingSubcommand if no subcommand is provided.
+    /// The ParseResult.subcommand field becomes non-optional (ParseSubcommandUnion).
+    /// Only valid when subcommands are defined (subcommands.len > 0).
+    subcommand_required: bool = false,
 };
+
+/// Look up a subcommand definition by name at comptime.
+///
+/// Used by `deinitRawResult` and `deinitResult` to resolve the `Command`
+/// definition corresponding to a tagged union variant's `@tagName`.
+pub fn getSubcommandByName(comptime cmd: Command, comptime name: []const u8) Command {
+    for (cmd.subcommands) |sub| {
+        if (std.mem.eql(u8, sub.name, name)) return sub;
+    }
+    @compileError("getSubcommandByName: no subcommand '" ++ name ++ "' in command '" ++ cmd.name ++ "'");
+}
 
 /// Validate a single Arg definition at comptime.
 /// Called automatically during RawResult/ParseResult generation;
 /// can also be called directly for early validation.
 pub fn validateArg(comptime arg: Arg) void {
-    validateIdent(arg.name);
+    validateIdent("Arg", arg.name);
     validateKindRules(arg);
     validateConstraints(arg);
     validateNameFormats(arg);
@@ -116,6 +136,51 @@ pub fn validateCommand(comptime cmd: Command) void {
 
     validateArgUniqueness(cmd);
     validatePositionalOrder(cmd);
+
+    if (cmd.subcommand_required and cmd.subcommands.len == 0) {
+        compileErrorInvalidDefinition(
+            "Command",
+            cmd.name,
+            "subcommand_required cannot be true when no subcommands are defined",
+            .{},
+        );
+    }
+
+    if (cmd.subcommands.len > 0) {
+        // Positional args cannot coexist with subcommands: the parser cannot
+        // distinguish a subcommand name from a positional argument value.
+        inline for (cmd.args) |arg| {
+            if (arg.kind == .positional) {
+                compileErrorInvalidDefinition(
+                    "Command",
+                    cmd.name,
+                    "positional Arg '{s}' cannot coexist with subcommands",
+                    .{arg.name},
+                );
+            }
+        }
+
+        // The generated struct uses "subcommand" as a field name, so no Arg
+        // may claim that name when subcommands are present.
+        inline for (cmd.args) |arg| {
+            if (std.mem.eql(u8, arg.name, "subcommand")) {
+                compileErrorInvalidDefinition(
+                    "Command",
+                    cmd.name,
+                    "Arg name 'subcommand' is reserved when subcommands are defined",
+                    .{},
+                );
+            }
+        }
+
+        validateSubcommandUniqueness(cmd);
+
+        // Recursively validate each subcommand definition.
+        inline for (cmd.subcommands) |sub| {
+            validateIdent("Subcommand", sub.name);
+            validateCommand(sub);
+        }
+    }
 }
 
 fn compileErrorInvalidDefinition(
@@ -192,18 +257,18 @@ pub fn isNonFiniteLiteral(str: []const u8) bool {
         std.ascii.eqlIgnoreCase(s, "infinity");
 }
 
-fn validateIdent(comptime name: []const u8) void {
+fn validateIdent(comptime context_type: []const u8, comptime name: []const u8) void {
     const error_msg = "name must be a valid Zig identifier";
-    if (name.len == 0) compileErrorInvalidDefinition("Arg", "", error_msg, .{});
+    if (name.len == 0) compileErrorInvalidDefinition(context_type, "", error_msg, .{});
 
     const first = name[0];
     if (!(std.ascii.isAlphabetic(first) or first == '_')) {
-        compileErrorInvalidDefinition("Arg", name, error_msg, .{});
+        compileErrorInvalidDefinition(context_type, name, error_msg, .{});
     }
 
     for (name[1..]) |c| {
         if (!(std.ascii.isAlphanumeric(c) or c == '_')) {
-            compileErrorInvalidDefinition("Arg", name, error_msg, .{});
+            compileErrorInvalidDefinition(context_type, name, error_msg, .{});
         }
     }
 }
@@ -429,6 +494,21 @@ test "isHexFloat: rejects non-hex strings" {
     try std.testing.expect(!isHexFloat(""));
     try std.testing.expect(!isHexFloat("x"));
     try std.testing.expect(!isHexFloat("0b101"));
+}
+
+fn validateSubcommandUniqueness(comptime cmd: Command) void {
+    inline for (cmd.subcommands, 0..) |sub_a, i| {
+        inline for (cmd.subcommands[i + 1 ..]) |sub_b| {
+            if (std.mem.eql(u8, sub_a.name, sub_b.name)) {
+                compileErrorInvalidDefinition(
+                    "Command",
+                    cmd.name,
+                    "duplicate subcommand name '{s}'",
+                    .{sub_a.name},
+                );
+            }
+        }
+    }
 }
 
 fn validatePositionalOrder(comptime cmd: Command) void {

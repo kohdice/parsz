@@ -12,6 +12,44 @@ const Command = definitions.Command;
 const Diagnostic = errors.Diagnostic;
 const ParseError = errors.ParseError;
 
+/// Comptime-generated tagged union for subcommand typed results.
+///
+/// Each variant corresponds to a subcommand defined in `cmd.subcommands`,
+/// with the variant name being the subcommand name and the payload being
+/// the `ParseResult` for that subcommand.
+pub fn ParseSubcommandUnion(comptime cmd: Command) type {
+    var union_fields: [cmd.subcommands.len]std.builtin.Type.UnionField = undefined;
+    for (cmd.subcommands, 0..) |sub, i| {
+        union_fields[i] = .{
+            .name = sub.name ++ "",
+            .type = ParseResult(sub),
+            .alignment = @alignOf(ParseResult(sub)),
+        };
+    }
+    return @Type(.{ .@"union" = .{
+        .layout = .auto,
+        .tag_type = ParseSubcommandTag(cmd),
+        .fields = &union_fields,
+        .decls = &.{},
+    } });
+}
+
+fn ParseSubcommandTag(comptime cmd: Command) type {
+    var tag_fields: [cmd.subcommands.len]std.builtin.Type.EnumField = undefined;
+    for (cmd.subcommands, 0..) |sub, i| {
+        tag_fields[i] = .{
+            .name = sub.name ++ "",
+            .value = i,
+        };
+    }
+    return @Type(.{ .@"enum" = .{
+        .tag_type = std.math.IntFittingRange(0, if (cmd.subcommands.len > 0) cmd.subcommands.len - 1 else 0),
+        .fields = &tag_fields,
+        .decls = &.{},
+        .is_exhaustive = true,
+    } });
+}
+
 /// Comptime-generated struct holding fully typed parse results.
 ///
 /// Field type rules:
@@ -20,10 +58,14 @@ const ParseError = errors.ParseError;
 /// - option/positional, required, !multiple              → T
 /// - option/positional, has default, !multiple           → T
 /// - option/positional, multiple                         → []const T
+/// - subcommand (subcommands defined, !subcommand_required) → ?ParseSubcommandUnion(cmd)
+/// - subcommand (subcommands defined, subcommand_required)  → ParseSubcommandUnion(cmd)
 pub fn ParseResult(comptime cmd: Command) type {
     @setEvalBranchQuota(10_000);
     comptime definitions.validateCommand(cmd);
-    var fields: [cmd.args.len]std.builtin.Type.StructField = undefined;
+
+    const sub_field_count: usize = if (cmd.subcommands.len > 0) 1 else 0;
+    var fields: [cmd.args.len + sub_field_count]std.builtin.Type.StructField = undefined;
     for (cmd.args, 0..) |arg, i| {
         const T = ParseFieldType(arg);
         fields[i] = .{
@@ -35,6 +77,30 @@ pub fn ParseResult(comptime cmd: Command) type {
             .alignment = @alignOf(T),
         };
     }
+
+    if (cmd.subcommands.len > 0) {
+        if (cmd.subcommand_required) {
+            const SubT = ParseSubcommandUnion(cmd);
+            fields[cmd.args.len] = .{
+                .name = "subcommand",
+                .type = SubT,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(SubT),
+            };
+        } else {
+            const SubT = ?ParseSubcommandUnion(cmd);
+            const default_val: SubT = null;
+            fields[cmd.args.len] = .{
+                .name = "subcommand",
+                .type = SubT,
+                .default_value_ptr = @ptrCast(&default_val),
+                .is_comptime = false,
+                .alignment = @alignOf(SubT),
+            };
+        }
+    }
+
     return @Type(.{ .@"struct" = .{
         .layout = .auto,
         .fields = &fields,
@@ -83,7 +149,26 @@ pub fn validate(
         }
     }
 
-    errdefer deinitResult(cmd, &result, allocator);
+    // Initialize subcommand field to null when optional.
+    // When subcommand_required = true, the field is non-optional and cannot be
+    // set to null. This is safe because the errdefer below only frees arg
+    // multiple fields, never touching the subcommand field.
+    if (cmd.subcommands.len > 0 and !cmd.subcommand_required) {
+        result.subcommand = null;
+    }
+
+    // Free only arg multiple fields on error. We intentionally avoid calling
+    // deinitResult() here because it would access result.subcommand, which may
+    // be undefined when subcommand_required = true and validation fails before
+    // the subcommand is assigned.
+    errdefer {
+        inline for (cmd.args) |arg| {
+            if (arg.multiple) {
+                const slice = @field(&result, arg.name);
+                if (slice.len > 0) allocator.free(slice);
+            }
+        }
+    }
 
     inline for (cmd.args) |arg| {
         if (arg.multiple) {
@@ -112,6 +197,21 @@ pub fn validate(
                 };
                 return err;
             };
+        }
+    }
+
+    // Recursively validate the active subcommand variant, if any.
+    if (cmd.subcommands.len > 0) {
+        if (raw.subcommand) |*raw_sub| {
+            result.subcommand = switch (raw_sub.*) {
+                inline else => |*payload, tag| blk: {
+                    const subcmd_def = comptime definitions.getSubcommandByName(cmd, @tagName(tag));
+                    const sub_result = try validate(allocator, subcmd_def, payload, diagnostic);
+                    break :blk @unionInit(ParseSubcommandUnion(cmd), @tagName(tag), sub_result);
+                },
+            };
+        } else if (cmd.subcommand_required) {
+            return ParseError.MissingSubcommand;
         }
     }
 
@@ -307,6 +407,29 @@ pub fn deinitResult(
             // Passing any of these to allocator.free() is invalid (safety-checked illegal behavior).
             if (slice.len > 0) {
                 allocator.free(slice);
+            }
+        }
+    }
+
+    // Recursively deinit the active subcommand variant, if any.
+    if (cmd.subcommands.len > 0) {
+        if (cmd.subcommand_required) {
+            // Non-optional: always deinit
+            switch (result.subcommand) {
+                inline else => |*payload, tag| {
+                    const subcmd_def = comptime definitions.getSubcommandByName(cmd, @tagName(tag));
+                    deinitResult(subcmd_def, payload, allocator);
+                },
+            }
+        } else {
+            // Optional: null-check first
+            if (result.subcommand) |*sub| {
+                switch (sub.*) {
+                    inline else => |*payload, tag| {
+                        const subcmd_def = comptime definitions.getSubcommandByName(cmd, @tagName(tag));
+                        deinitResult(subcmd_def, payload, allocator);
+                    },
+                }
             }
         }
     }
@@ -1363,4 +1486,177 @@ test "validator: f32 dot-prefixed overflow → ValueOutOfRange" {
     var tok = Tokenizer{ .args = &.{"--val=.1e40"} };
     var raw = try parser.parseTokens(testing.allocator, &tok, f32_cmd, null);
     try testing.expectError(ParseError.ValueOutOfRange, validate(testing.allocator, f32_cmd, &raw, null));
+}
+
+// --- Subcommand validator tests ---
+
+const sub_cmd_validator = Command{
+    .name = "app",
+    .args = &.{
+        .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+    },
+    .subcommands = &.{
+        .{
+            .name = "init",
+            .args = &.{
+                .{ .name = "name", .kind = .positional, .required = true },
+            },
+        },
+        .{
+            .name = "build",
+            .args = &.{
+                .{ .name = "release", .kind = .flag, .value_type = .boolean, .long = "release" },
+                .{ .name = "jobs", .kind = .option, .value_type = .i64, .long = "jobs", .default = "4" },
+            },
+        },
+    },
+};
+
+test "validator: subcommand type conversion and defaults" {
+    var tok = Tokenizer{ .args = &.{ "-v", "build" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, sub_cmd_validator, null);
+    defer parser.deinitRawResult(sub_cmd_validator, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, sub_cmd_validator, &raw, null);
+    defer deinitResult(sub_cmd_validator, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .build => |build_r| {
+            try testing.expect(build_r.release == false);
+            try testing.expectEqual(@as(i64, 4), build_r.jobs);
+        },
+        .init => unreachable,
+    }
+}
+
+test "validator: subcommand required check" {
+    var tok = Tokenizer{ .args = &.{"init"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, sub_cmd_validator, null);
+    defer parser.deinitRawResult(sub_cmd_validator, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.MissingRequired, validate(testing.allocator, sub_cmd_validator, &raw, null));
+}
+
+test "validator: subcommand not specified → null" {
+    var tok = Tokenizer{ .args = &.{"-v"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, sub_cmd_validator, null);
+    defer parser.deinitRawResult(sub_cmd_validator, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, sub_cmd_validator, &raw, null);
+    defer deinitResult(sub_cmd_validator, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    try testing.expect(result.subcommand == null);
+}
+
+test "validator: subcommand with multiple field" {
+    const cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{
+                .name = "run",
+                .args = &.{
+                    .{ .name = "files", .kind = .positional, .multiple = true },
+                },
+            },
+        },
+    };
+
+    var tok = Tokenizer{ .args = &.{ "run", "a.txt", "b.txt" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, cmd, null);
+    defer parser.deinitRawResult(cmd, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, cmd, &raw, null);
+    defer deinitResult(cmd, &result, testing.allocator);
+
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .run => |run_r| {
+            try testing.expectEqual(@as(usize, 2), run_r.files.len);
+            try testing.expectEqualStrings("a.txt", run_r.files[0]);
+            try testing.expectEqualStrings("b.txt", run_r.files[1]);
+        },
+    }
+}
+
+test "validator: subcommand diagnostic on invalid value" {
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{ "build", "--jobs=abc" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, sub_cmd_validator, null);
+    defer parser.deinitRawResult(sub_cmd_validator, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.InvalidValue, validate(testing.allocator, sub_cmd_validator, &raw, &diagnostic));
+    try testing.expectEqualStrings("jobs", diagnostic.arg_name);
+    try testing.expectEqualStrings("abc", diagnostic.provided_value);
+}
+
+// --- subcommand_required validator tests ---
+
+const sub_cmd_required = Command{
+    .name = "app",
+    .args = &.{
+        .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+    },
+    .subcommands = &.{
+        .{
+            .name = "init",
+            .args = &.{
+                .{ .name = "name", .kind = .positional, .required = true },
+            },
+        },
+        .{
+            .name = "build",
+            .args = &.{
+                .{ .name = "release", .kind = .flag, .value_type = .boolean, .long = "release" },
+                .{ .name = "jobs", .kind = .option, .value_type = .i64, .long = "jobs", .default = "4" },
+            },
+        },
+    },
+    .subcommand_required = true,
+};
+
+test "validator: subcommand_required missing → MissingSubcommand" {
+    var tok = Tokenizer{ .args = &.{"-v"} };
+    var raw = try parser.parseTokens(testing.allocator, &tok, sub_cmd_required, null);
+    defer parser.deinitRawResult(sub_cmd_required, &raw, testing.allocator);
+
+    try testing.expectError(ParseError.MissingSubcommand, validate(testing.allocator, sub_cmd_required, &raw, null));
+}
+
+test "validator: subcommand_required provided → success (non-optional field)" {
+    var tok = Tokenizer{ .args = &.{ "-v", "build" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, sub_cmd_required, null);
+    defer parser.deinitRawResult(sub_cmd_required, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, sub_cmd_required, &raw, null);
+    defer deinitResult(sub_cmd_required, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    // Non-optional: direct switch without null check
+    switch (result.subcommand) {
+        .build => |build_r| {
+            try testing.expect(build_r.release == false);
+            try testing.expectEqual(@as(i64, 4), build_r.jobs);
+        },
+        .init => unreachable,
+    }
+}
+
+test "validator: subcommand_required provided with typed args → defaults applied" {
+    var tok = Tokenizer{ .args = &.{ "build", "--release", "--jobs=8" } };
+    var raw = try parser.parseTokens(testing.allocator, &tok, sub_cmd_required, null);
+    defer parser.deinitRawResult(sub_cmd_required, &raw, testing.allocator);
+
+    var result = try validate(testing.allocator, sub_cmd_required, &raw, null);
+    defer deinitResult(sub_cmd_required, &result, testing.allocator);
+
+    switch (result.subcommand) {
+        .build => |build_r| {
+            try testing.expect(build_r.release == true);
+            try testing.expectEqual(@as(i64, 8), build_r.jobs);
+        },
+        .init => unreachable,
+    }
 }

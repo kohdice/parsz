@@ -20,6 +20,44 @@ const Command = definitions.Command;
 const Diagnostic = errors.Diagnostic;
 const ParseError = errors.ParseError;
 
+/// Comptime-generated tagged union for subcommand raw results.
+///
+/// Each variant corresponds to a subcommand defined in `cmd.subcommands`,
+/// with the variant name being the subcommand name and the payload being
+/// the `RawResult` for that subcommand.
+pub fn RawSubcommandUnion(comptime cmd: Command) type {
+    var union_fields: [cmd.subcommands.len]std.builtin.Type.UnionField = undefined;
+    for (cmd.subcommands, 0..) |sub, i| {
+        union_fields[i] = .{
+            .name = sub.name ++ "",
+            .type = RawResult(sub),
+            .alignment = @alignOf(RawResult(sub)),
+        };
+    }
+    return @Type(.{ .@"union" = .{
+        .layout = .auto,
+        .tag_type = RawSubcommandTag(cmd),
+        .fields = &union_fields,
+        .decls = &.{},
+    } });
+}
+
+fn RawSubcommandTag(comptime cmd: Command) type {
+    var tag_fields: [cmd.subcommands.len]std.builtin.Type.EnumField = undefined;
+    for (cmd.subcommands, 0..) |sub, i| {
+        tag_fields[i] = .{
+            .name = sub.name ++ "",
+            .value = i,
+        };
+    }
+    return @Type(.{ .@"enum" = .{
+        .tag_type = std.math.IntFittingRange(0, if (cmd.subcommands.len > 0) cmd.subcommands.len - 1 else 0),
+        .fields = &tag_fields,
+        .decls = &.{},
+        .is_exhaustive = true,
+    } });
+}
+
 /// Comptime-generated struct holding raw (string) parse results.
 ///
 /// Field types:
@@ -27,10 +65,13 @@ const ParseError = errors.ParseError;
 /// - single option  → ?[]const u8     (initial: null)
 /// - single positional → ?[]const u8  (initial: null)
 /// - multiple option/positional → std.ArrayListUnmanaged([]const u8)  (initial: .{})
+/// - subcommand (when cmd.subcommands.len > 0) → ?RawSubcommandUnion(cmd) (initial: null)
 pub fn RawResult(comptime cmd: Command) type {
     @setEvalBranchQuota(10_000);
     comptime definitions.validateCommand(cmd);
-    var fields: [cmd.args.len]std.builtin.Type.StructField = undefined;
+
+    const sub_field_count: usize = if (cmd.subcommands.len > 0) 1 else 0;
+    var fields: [cmd.args.len + sub_field_count]std.builtin.Type.StructField = undefined;
     for (cmd.args, 0..) |arg, i| {
         const T = RawFieldType(arg);
         fields[i] = .{
@@ -42,6 +83,19 @@ pub fn RawResult(comptime cmd: Command) type {
             .alignment = @alignOf(T),
         };
     }
+
+    if (cmd.subcommands.len > 0) {
+        const SubT = ?RawSubcommandUnion(cmd);
+        const default_val: SubT = null;
+        fields[cmd.args.len] = .{
+            .name = "subcommand",
+            .type = SubT,
+            .default_value_ptr = @ptrCast(&default_val),
+            .is_comptime = false,
+            .alignment = @alignOf(SubT),
+        };
+    }
+
     return @Type(.{ .@"struct" = .{
         .layout = .auto,
         .fields = &fields,
@@ -92,6 +146,7 @@ pub fn parseTokens(
     errdefer deinitRawResult(cmd, &result, allocator);
 
     var positional_index: usize = 0;
+    var end_of_options_seen = false;
 
     while (tok.next()) |token| {
         switch (token) {
@@ -102,6 +157,19 @@ pub fn parseTokens(
                 try handleLong(cmd, &result, tok, allocator, long.name, long.value, diagnostic);
             },
             .positional => |value| {
+                if (cmd.subcommands.len > 0 and !end_of_options_seen) {
+                    // Try to match the positional token as a subcommand name.
+                    const sub_result = try dispatchSubcommand(
+                        cmd,
+                        allocator,
+                        tok,
+                        value,
+                        diagnostic,
+                    );
+                    result.subcommand = sub_result;
+                    return result;
+                }
+
                 try handlePositional(
                     cmd,
                     &result,
@@ -112,13 +180,38 @@ pub fn parseTokens(
                 );
             },
             .end_of_options => {
-                // Intentional no-op: the Tokenizer already set options_ended=true,
+                end_of_options_seen = true;
+                // Intentional no-op for the Tokenizer: it already set options_ended=true,
                 // so all subsequent tokens will arrive as .positional.
             },
         }
     }
 
     return result;
+}
+
+/// Attempt to match a positional value against defined subcommand names
+/// and recursively parse the remaining tokens for the matched subcommand.
+fn dispatchSubcommand(
+    comptime cmd: Command,
+    allocator: std.mem.Allocator,
+    tok: *Tokenizer,
+    value: []const u8,
+    diagnostic: ?*Diagnostic,
+) (ParseError || error{OutOfMemory})!RawSubcommandUnion(cmd) {
+    inline for (cmd.subcommands) |sub| {
+        if (std.mem.eql(u8, value, sub.name)) {
+            // Create a new Tokenizer for the remaining args.
+            // The sub-tokenizer starts with options_ended=false, so "--"
+            // state does NOT leak from parent to child (POSIX compliant).
+            var sub_tok = Tokenizer{ .args = tok.args[tok.index..] };
+            const sub_raw = try parseTokens(allocator, &sub_tok, sub, diagnostic);
+            return @unionInit(RawSubcommandUnion(cmd), sub.name, sub_raw);
+        }
+    }
+
+    if (diagnostic) |d| d.* = .{ .provided_value = value };
+    return ParseError.UnknownSubcommand;
 }
 
 fn handleShortCluster(
@@ -298,6 +391,19 @@ pub fn deinitRawResult(
             @field(result, arg.name).deinit(allocator);
         }
     }
+
+    // Recursively deinit the active subcommand variant, if any.
+    if (cmd.subcommands.len > 0) {
+        if (result.subcommand) |*sub| {
+            switch (sub.*) {
+                inline else => |*payload, tag| {
+                    const subcmd_def = comptime definitions.getSubcommandByName(cmd, @tagName(tag));
+                    deinitRawResult(subcmd_def, payload, allocator);
+                },
+            }
+        }
+    }
+
     result.* = undefined;
 }
 
@@ -630,4 +736,134 @@ test "parser: long name substring does not match" {
     };
     var tok = Tokenizer{ .args = &.{"--verb"} };
     try testing.expectError(ParseError.UnknownFlag, parseTokens(testing.allocator, &tok, cmd, null));
+}
+
+// --- Subcommand tests ---
+
+const sub_cmd = Command{
+    .name = "app",
+    .args = &.{
+        .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+    },
+    .subcommands = &.{
+        .{
+            .name = "init",
+            .args = &.{
+                .{ .name = "name", .kind = .positional, .required = true },
+            },
+        },
+        .{
+            .name = "build",
+            .args = &.{
+                .{ .name = "release", .kind = .flag, .value_type = .boolean, .long = "release" },
+            },
+        },
+    },
+};
+
+test "parser: subcommand basic dispatch" {
+    var tok = Tokenizer{ .args = &.{ "init", "myproject" } };
+    var result = try parseTokens(testing.allocator, &tok, sub_cmd, null);
+    defer deinitRawResult(sub_cmd, &result, testing.allocator);
+
+    try testing.expect(result.verbose == false);
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .init => |init_r| {
+            try testing.expectEqualStrings("myproject", init_r.name.?);
+        },
+        .build => unreachable,
+    }
+}
+
+test "parser: global flag before subcommand" {
+    var tok = Tokenizer{ .args = &.{ "-v", "build", "--release" } };
+    var result = try parseTokens(testing.allocator, &tok, sub_cmd, null);
+    defer deinitRawResult(sub_cmd, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .build => |build_r| {
+            try testing.expect(build_r.release == true);
+        },
+        .init => unreachable,
+    }
+}
+
+test "parser: unknown subcommand → UnknownSubcommand" {
+    var tok = Tokenizer{ .args = &.{"unknown"} };
+    try testing.expectError(ParseError.UnknownSubcommand, parseTokens(testing.allocator, &tok, sub_cmd, null));
+}
+
+test "parser: subcommand not specified → null" {
+    var tok = Tokenizer{ .args = &.{"-v"} };
+    const result = try parseTokens(testing.allocator, &tok, sub_cmd, null);
+
+    try testing.expect(result.verbose == true);
+    try testing.expect(result.subcommand == null);
+}
+
+test "parser: '--' prevents subcommand matching" {
+    // After "--", "init" should not be matched as a subcommand.
+    // Since the parent command has no positional args, this will be TooManyPositionals.
+    var tok = Tokenizer{ .args = &.{ "--", "init" } };
+    try testing.expectError(ParseError.TooManyPositionals, parseTokens(testing.allocator, &tok, sub_cmd, null));
+}
+
+test "parser: diagnostic on unknown subcommand" {
+    var diagnostic: Diagnostic = .{};
+    var tok = Tokenizer{ .args = &.{"unknown"} };
+    try testing.expectError(ParseError.UnknownSubcommand, parseTokens(testing.allocator, &tok, sub_cmd, &diagnostic));
+    try testing.expectEqualStrings("unknown", diagnostic.provided_value);
+}
+
+test "parser: nested subcommands (2 levels)" {
+    const nested_cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{
+                .name = "remote",
+                .subcommands = &.{
+                    .{
+                        .name = "add",
+                        .args = &.{
+                            .{ .name = "name", .kind = .positional, .required = true },
+                        },
+                    },
+                },
+            },
+        },
+    };
+
+    var tok = Tokenizer{ .args = &.{ "remote", "add", "origin" } };
+    var result = try parseTokens(testing.allocator, &tok, nested_cmd, null);
+    defer deinitRawResult(nested_cmd, &result, testing.allocator);
+
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .remote => |remote_r| {
+            try testing.expect(remote_r.subcommand != null);
+            switch (remote_r.subcommand.?) {
+                .add => |add_r| {
+                    try testing.expectEqualStrings("origin", add_r.name.?);
+                },
+            }
+        },
+    }
+}
+
+test "parser: subcommand with no args" {
+    const cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{ .name = "status" },
+        },
+    };
+
+    var tok = Tokenizer{ .args = &.{"status"} };
+    var result = try parseTokens(testing.allocator, &tok, cmd, null);
+    defer deinitRawResult(cmd, &result, testing.allocator);
+
+    try testing.expect(result.subcommand != null);
 }

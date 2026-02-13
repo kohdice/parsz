@@ -22,6 +22,7 @@ pub const Diagnostic = errors.Diagnostic;
 pub const ParseError = errors.ParseError;
 
 pub const ParseResult = validator.ParseResult;
+pub const ParseSubcommandUnion = validator.ParseSubcommandUnion;
 
 /// Parse command-line arguments through the 3-stage pipeline.
 ///
@@ -1125,4 +1126,367 @@ test "integration: OutOfMemory does not leak (multiple u8 option)" {
         },
     };
     try testOomSafety(cmd, &.{ "--byte=1", "--byte=2", "--byte=3" });
+}
+
+// --- Subcommand integration tests ---
+
+const sub_cmd = Command{
+    .name = "myapp",
+    .args = &.{
+        .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+    },
+    .subcommands = &.{
+        .{
+            .name = "init",
+            .args = &.{
+                .{ .name = "name", .kind = .positional, .required = true },
+            },
+        },
+        .{
+            .name = "build",
+            .args = &.{
+                .{ .name = "release", .kind = .flag, .value_type = .boolean, .long = "release" },
+                .{ .name = "jobs", .kind = .option, .value_type = .i64, .long = "jobs", .default = "4" },
+            },
+        },
+    },
+};
+
+test "integration: subcommand full pipeline" {
+    const argv: []const [:0]const u8 = &.{ "-v", "init", "myproject" };
+    var result = try parse(testing.allocator, argv, sub_cmd, null);
+    defer deinit(sub_cmd, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .init => |init_r| {
+            try testing.expectEqualStrings("myproject", init_r.name);
+        },
+        .build => unreachable,
+    }
+}
+
+test "integration: subcommand with typed option and default" {
+    const argv: []const [:0]const u8 = &.{ "build", "--release" };
+    var result = try parse(testing.allocator, argv, sub_cmd, null);
+    defer deinit(sub_cmd, &result, testing.allocator);
+
+    try testing.expect(result.verbose == false);
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .build => |build_r| {
+            try testing.expect(build_r.release == true);
+            try testing.expectEqual(@as(i64, 4), build_r.jobs);
+        },
+        .init => unreachable,
+    }
+}
+
+test "integration: subcommand not specified → null" {
+    const argv: []const [:0]const u8 = &.{"-v"};
+    var result = try parse(testing.allocator, argv, sub_cmd, null);
+    defer deinit(sub_cmd, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    try testing.expect(result.subcommand == null);
+}
+
+test "integration: unknown subcommand → UnknownSubcommand" {
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{"unknown"};
+    try testing.expectError(ParseError.UnknownSubcommand, parse(testing.allocator, argv, sub_cmd, &diagnostic));
+    try testing.expectEqualStrings("unknown", diagnostic.provided_value);
+}
+
+test "integration: '--' prevents subcommand matching" {
+    const argv: []const [:0]const u8 = &.{ "--", "init" };
+    try testing.expectError(ParseError.TooManyPositionals, parse(testing.allocator, argv, sub_cmd, null));
+}
+
+test "integration: nested subcommands (2 levels)" {
+    const nested_cmd = Command{
+        .name = "git",
+        .subcommands = &.{
+            .{
+                .name = "remote",
+                .subcommands = &.{
+                    .{
+                        .name = "add",
+                        .args = &.{
+                            .{ .name = "name", .kind = .positional, .required = true },
+                            .{ .name = "url", .kind = .positional, .required = true },
+                        },
+                    },
+                    .{
+                        .name = "remove",
+                        .args = &.{
+                            .{ .name = "name", .kind = .positional, .required = true },
+                        },
+                    },
+                },
+            },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "remote", "add", "origin", "https://example.com" };
+    var result = try parse(testing.allocator, argv, nested_cmd, null);
+    defer deinit(nested_cmd, &result, testing.allocator);
+
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .remote => |remote_r| {
+            try testing.expect(remote_r.subcommand != null);
+            switch (remote_r.subcommand.?) {
+                .add => |add_r| {
+                    try testing.expectEqualStrings("origin", add_r.name);
+                    try testing.expectEqualStrings("https://example.com", add_r.url);
+                },
+                .remove => unreachable,
+            }
+        },
+    }
+}
+
+test "integration: backward compatibility - Command without subcommands unchanged" {
+    const cmd = Command{
+        .name = "app",
+        .args = &.{
+            .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+            .{ .name = "input", .kind = .positional, .required = true },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "-v", "file.txt" };
+    const result = try parse(testing.allocator, argv, cmd, null);
+    try testing.expect(result.verbose == true);
+    try testing.expectEqualStrings("file.txt", result.input);
+}
+
+test "integration: subcommand with multiple field" {
+    const cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{
+                .name = "run",
+                .args = &.{
+                    .{ .name = "files", .kind = .positional, .multiple = true },
+                },
+            },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{ "run", "a.txt", "b.txt", "c.txt" };
+    var result = try parse(testing.allocator, argv, cmd, null);
+    defer deinit(cmd, &result, testing.allocator);
+
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .run => |run_r| {
+            try testing.expectEqual(@as(usize, 3), run_r.files.len);
+            try testing.expectEqualStrings("a.txt", run_r.files[0]);
+            try testing.expectEqualStrings("b.txt", run_r.files[1]);
+            try testing.expectEqualStrings("c.txt", run_r.files[2]);
+        },
+    }
+}
+
+test "integration: OutOfMemory does not leak (subcommand with multiple field)" {
+    const cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{
+                .name = "run",
+                .args = &.{
+                    .{ .name = "files", .kind = .positional, .multiple = true },
+                },
+            },
+        },
+    };
+    try testOomSafety(cmd, &.{ "run", "a.txt", "b.txt", "c.txt" });
+}
+
+test "integration: OutOfMemory does not leak (subcommand with multiple integer option)" {
+    const cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{
+                .name = "calc",
+                .args = &.{
+                    .{ .name = "nums", .kind = .option, .value_type = .i64, .long = "num", .multiple = true },
+                },
+            },
+        },
+    };
+    try testOomSafety(cmd, &.{ "calc", "--num=1", "--num=2", "--num=3" });
+}
+
+test "integration: subcommand deinit is safe when no subcommand specified" {
+    const argv: []const [:0]const u8 = &.{"-v"};
+    var result = try parse(testing.allocator, argv, sub_cmd, null);
+    // deinit should be safe when result.subcommand == null
+    deinit(sub_cmd, &result, testing.allocator);
+}
+
+test "integration: subcommand with no args, empty argv" {
+    const cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{ .name = "status" },
+        },
+    };
+
+    const argv: []const [:0]const u8 = &.{"status"};
+    var result = try parse(testing.allocator, argv, cmd, null);
+    defer deinit(cmd, &result, testing.allocator);
+    try testing.expect(result.subcommand != null);
+}
+
+test "integration: global option + subcommand + subcommand option" {
+    const argv: []const [:0]const u8 = &.{ "-v", "build", "--release", "--jobs=8" };
+    var result = try parse(testing.allocator, argv, sub_cmd, null);
+    defer deinit(sub_cmd, &result, testing.allocator);
+
+    try testing.expect(result.verbose == true);
+    try testing.expect(result.subcommand != null);
+    switch (result.subcommand.?) {
+        .build => |build_r| {
+            try testing.expect(build_r.release == true);
+            try testing.expectEqual(@as(i64, 8), build_r.jobs);
+        },
+        .init => unreachable,
+    }
+}
+
+// --- subcommand_required integration tests ---
+
+const sub_cmd_required = Command{
+    .name = "myapp",
+    .args = &.{
+        .{ .name = "verbose", .kind = .flag, .value_type = .boolean, .short = 'v', .long = "verbose" },
+    },
+    .subcommands = &.{
+        .{
+            .name = "init",
+            .args = &.{
+                .{ .name = "name", .kind = .positional, .required = true },
+            },
+        },
+        .{
+            .name = "build",
+            .args = &.{
+                .{ .name = "release", .kind = .flag, .value_type = .boolean, .long = "release" },
+                .{ .name = "jobs", .kind = .option, .value_type = .i64, .long = "jobs", .default = "4" },
+            },
+        },
+    },
+    .subcommand_required = true,
+};
+
+test "integration: subcommand_required missing → MissingSubcommand" {
+    const argv: []const [:0]const u8 = &.{"-v"};
+    try testing.expectError(ParseError.MissingSubcommand, parse(testing.allocator, argv, sub_cmd_required, null));
+}
+
+test "integration: subcommand_required empty argv → MissingSubcommand" {
+    const argv: []const [:0]const u8 = &.{};
+    try testing.expectError(ParseError.MissingSubcommand, parse(testing.allocator, argv, sub_cmd_required, null));
+}
+
+test "integration: subcommand_required valid subcommand (non-optional field)" {
+    const argv: []const [:0]const u8 = &.{ "init", "myproject" };
+    var result = try parse(testing.allocator, argv, sub_cmd_required, null);
+    defer deinit(sub_cmd_required, &result, testing.allocator);
+
+    // Non-optional: direct switch without null check
+    switch (result.subcommand) {
+        .init => |init_r| {
+            try testing.expectEqualStrings("myproject", init_r.name);
+        },
+        .build => unreachable,
+    }
+}
+
+test "integration: subcommand_required diagnostic is empty on MissingSubcommand" {
+    var diagnostic: Diagnostic = .{};
+    const argv: []const [:0]const u8 = &.{"-v"};
+    try testing.expectError(ParseError.MissingSubcommand, parse(testing.allocator, argv, sub_cmd_required, &diagnostic));
+    // MissingSubcommand does not populate any diagnostic fields
+    try testing.expectEqualStrings("", diagnostic.arg_name);
+    try testing.expectEqualStrings("", diagnostic.flag_name);
+    try testing.expectEqualStrings("", diagnostic.provided_value);
+}
+
+test "integration: subcommand_required unknown subcommand → UnknownSubcommand" {
+    const argv: []const [:0]const u8 = &.{"nonexistent"};
+    try testing.expectError(ParseError.UnknownSubcommand, parse(testing.allocator, argv, sub_cmd_required, null));
+}
+
+test "integration: subcommand_required '--' prevents subcommand matching" {
+    const argv: []const [:0]const u8 = &.{ "--", "init" };
+    try testing.expectError(ParseError.TooManyPositionals, parse(testing.allocator, argv, sub_cmd_required, null));
+}
+
+test "integration: nested subcommand_required" {
+    const nested_req_cmd = Command{
+        .name = "git",
+        .subcommands = &.{
+            .{
+                .name = "remote",
+                .subcommands = &.{
+                    .{
+                        .name = "add",
+                        .args = &.{
+                            .{ .name = "name", .kind = .positional, .required = true },
+                        },
+                    },
+                },
+                .subcommand_required = true,
+            },
+        },
+        .subcommand_required = true,
+    };
+
+    // Parent missing subcommand
+    {
+        const argv: []const [:0]const u8 = &.{};
+        try testing.expectError(ParseError.MissingSubcommand, parse(testing.allocator, argv, nested_req_cmd, null));
+    }
+    // Child missing subcommand
+    {
+        const argv: []const [:0]const u8 = &.{"remote"};
+        try testing.expectError(ParseError.MissingSubcommand, parse(testing.allocator, argv, nested_req_cmd, null));
+    }
+    // Both provided → success
+    {
+        const argv: []const [:0]const u8 = &.{ "remote", "add", "origin" };
+        var result = try parse(testing.allocator, argv, nested_req_cmd, null);
+        defer deinit(nested_req_cmd, &result, testing.allocator);
+
+        switch (result.subcommand) {
+            .remote => |remote_r| {
+                switch (remote_r.subcommand) {
+                    .add => |add_r| {
+                        try testing.expectEqualStrings("origin", add_r.name);
+                    },
+                }
+            },
+        }
+    }
+}
+
+test "integration: OutOfMemory does not leak (subcommand_required with multiple field)" {
+    const cmd = Command{
+        .name = "app",
+        .subcommands = &.{
+            .{
+                .name = "run",
+                .args = &.{
+                    .{ .name = "files", .kind = .positional, .multiple = true },
+                },
+            },
+        },
+        .subcommand_required = true,
+    };
+    try testOomSafety(cmd, &.{ "run", "a.txt", "b.txt", "c.txt" });
 }

@@ -26,6 +26,8 @@
 /// | ValueOutOfRange   | x        | x (*)     | x              |
 /// | TooManyPositionals| x (**)   |           | x              |
 /// | DuplicateArg      | x        | x         | x              |
+/// | UnknownSubcommand |          |           | x              |
+/// | MissingSubcommand |          |           |                |
 ///
 /// (*) flag_name is set for option/flag kinds; empty for positionals.
 /// (**) arg_name is set to the last positional arg's name when positional
@@ -88,4 +90,14 @@ pub const ParseError = error{
     /// Note: Flags are idempotent and never produce DuplicateArg.
     /// Excess positional arguments produce TooManyPositionals instead.
     DuplicateArg,
+
+    /// An unrecognized subcommand name was provided.
+    /// Example: `myapp unknown` when only `init` and `build` are defined.
+    /// Diagnostic: `provided_value` contains the unrecognized subcommand string.
+    UnknownSubcommand,
+
+    /// A required subcommand was not provided.
+    /// Example: `myapp -v` when `subcommand_required = true`.
+    /// Diagnostic: no fields are populated (all empty defaults).
+    MissingSubcommand,
 };
