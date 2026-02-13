@@ -30,6 +30,13 @@ pub fn build(b: *std.Build) void {
     const install_exe = b.addInstallArtifact(exe, .{});
     examples_step.dependOn(&install_exe.step);
 
+    const sub_exe = b.addExecutable(.{
+        .name = "subcommand",
+        .root_module = createClientModule(b, mod, target, optimize, "examples/subcommand.zig"),
+    });
+    const install_sub_exe = b.addInstallArtifact(sub_exe, .{});
+    examples_step.dependOn(&install_sub_exe.step);
+
     // --- comptime validation tests ---
     const comptime_test_step = b.step("test-comptime", "Run comptime validation tests");
 
@@ -37,6 +44,8 @@ pub fn build(b: *std.Build) void {
     const valid_tests = .{
         "test/comptime/valid_definitions.zig",
         "test/comptime/keyword_arg_name.zig",
+        "test/comptime/subcommand_valid.zig",
+        "test/comptime/subcommand_required_valid.zig",
     };
 
     inline for (valid_tests) |path| {
@@ -104,6 +113,13 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/duplicate_name.zig", "duplicate Arg.name 'foo'" },
         .{ "test/comptime/duplicate_short.zig", "duplicate Arg.short '-x' between 'foo' and 'bar'" },
         .{ "test/comptime/duplicate_long.zig", "duplicate Arg.long '--same' between 'foo' and 'bar'" },
+
+        // Subcommand validation
+        .{ "test/comptime/subcommand_duplicate_name.zig", "duplicate subcommand name 'init'" },
+        .{ "test/comptime/subcommand_invalid_name.zig", "name must be a valid Zig identifier" },
+        .{ "test/comptime/subcommand_positional_conflict.zig", "positional Arg 'file' cannot coexist with subcommands" },
+        .{ "test/comptime/subcommand_reserved_field.zig", "'subcommand' is reserved when subcommands are defined" },
+        .{ "test/comptime/subcommand_required_without_subcommands.zig", "subcommand_required cannot be true when no subcommands are defined" },
     };
 
     inline for (error_tests) |test_case| {

@@ -1,9 +1,17 @@
 const std = @import("std");
 const parsz = @import("parsz");
 
+/// Git-style CLI command definition with subcommands.
+///
+/// Usage:
+///   myapp [--verbose] <subcommand>
+///
+/// Subcommands:
+///   init <name>                   Initialize a new project
+///   build [--release] [--jobs=N]  Build the project
 const cmd = parsz.Command{
-    .name = "sample",
-    .about = "A sample CLI application",
+    .name = "myapp",
+    .about = "A sample CLI application demonstrating subcommand support",
     .args = &.{
         .{
             .name = "verbose",
@@ -13,31 +21,45 @@ const cmd = parsz.Command{
             .value_type = .boolean,
             .help = "Enable verbose output",
         },
+    },
+    .subcommands = &.{
         .{
-            .name = "output",
-            .kind = .option,
-            .short = 'o',
-            .long = "output",
-            .value_type = .string,
-            .default = "out.txt",
-            .help = "Output file path",
+            .name = "init",
+            .about = "Initialize a new project",
+            .args = &.{
+                .{
+                    .name = "name",
+                    .kind = .positional,
+                    .value_type = .string,
+                    .required = true,
+                    .help = "Project name",
+                },
+            },
         },
         .{
-            .name = "count",
-            .kind = .option,
-            .value_type = .i64,
-            .long = "count",
-            .default = "1",
-            .help = "Repeat count",
-        },
-        .{
-            .name = "input",
-            .kind = .positional,
-            .value_type = .string,
-            .required = true,
-            .help = "Input file",
+            .name = "build",
+            .about = "Build the project",
+            .args = &.{
+                .{
+                    .name = "release",
+                    .kind = .flag,
+                    .long = "release",
+                    .value_type = .boolean,
+                    .help = "Build in release mode",
+                },
+                .{
+                    .name = "jobs",
+                    .kind = .option,
+                    .short = 'j',
+                    .long = "jobs",
+                    .value_type = .i64,
+                    .default = "4",
+                    .help = "Number of parallel jobs",
+                },
+            },
         },
     },
+    .subcommand_required = true,
 };
 
 pub fn main() !void {
@@ -54,6 +76,16 @@ pub fn main() !void {
     var diagnostic: parsz.Diagnostic = .{};
     var result = parsz.parse(allocator, argv, cmd, &diagnostic) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
+        error.MissingSubcommand => {
+            std.debug.print("Error: subcommand is required\n", .{});
+            std.debug.print("Available subcommands: init, build\n", .{});
+            std.process.exit(1);
+        },
+        error.UnknownSubcommand => {
+            std.debug.print("Error: unknown subcommand '{s}'\n", .{diagnostic.provided_value});
+            std.debug.print("Available subcommands: init, build\n", .{});
+            std.process.exit(1);
+        },
         error.UnknownFlag,
         error.MissingValue,
         error.MissingRequired,
@@ -61,8 +93,6 @@ pub fn main() !void {
         error.ValueOutOfRange,
         error.TooManyPositionals,
         error.DuplicateArg,
-        error.UnknownSubcommand,
-        error.MissingSubcommand,
         => {
             if (diagnostic.flag_name.len > 0 and diagnostic.arg_name.len > 0) {
                 // Known option/flag: determine the label by matching against the definition
@@ -102,8 +132,19 @@ pub fn main() !void {
     };
     defer parsz.deinit(cmd, &result, allocator);
 
-    std.debug.print("verbose: {}\n", .{result.verbose});
-    std.debug.print("output:  {s}\n", .{result.output});
-    std.debug.print("count:   {d}\n", .{result.count});
-    std.debug.print("input:   {s}\n", .{result.input});
+    if (result.verbose) {
+        std.debug.print("[verbose mode enabled]\n", .{});
+    }
+
+    // subcommand_required = true makes result.subcommand non-optional,
+    // allowing a direct switch without null check.
+    switch (result.subcommand) {
+        .init => |init_result| {
+            std.debug.print("Initializing project '{s}'\n", .{init_result.name});
+        },
+        .build => |build_result| {
+            const mode: []const u8 = if (build_result.release) "release" else "debug";
+            std.debug.print("Building project ({s} mode, {d} jobs)\n", .{ mode, build_result.jobs });
+        },
+    }
 }
