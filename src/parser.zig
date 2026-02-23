@@ -259,6 +259,9 @@ pub fn parseArgs(
             const default = @as(*const field.type, @ptrCast(@alignCast(ptr))).*;
             @field(result, field.name) = default;
             field_set.insert(@field(FieldEnum, field.name));
+        } else if (@typeInfo(field.type) == .optional) {
+            @field(result, field.name) = null;
+            field_set.insert(@field(FieldEnum, field.name));
         }
     }
 
@@ -387,7 +390,8 @@ pub fn handleLong(
 
             // option: duplicate check for required (no default) fields
             if (field_set.contains(@field(FieldEnum, field.name)) and
-                field.default_value_ptr == null)
+                field.default_value_ptr == null and
+                @typeInfo(field.type) != .optional)
                 return error.DuplicateArg;
 
             const ValueType = comptime unwrapOptional(field.type);
@@ -451,7 +455,8 @@ pub fn handleShort(
                 }
 
                 if (field_set.contains(@field(FieldEnum, field.name)) and
-                    field.default_value_ptr == null)
+                    field.default_value_ptr == null and
+                    @typeInfo(field.type) != .optional)
                     return error.DuplicateArg;
 
                 const ValueType = comptime unwrapOptional(field.type);
@@ -568,6 +573,30 @@ test "parser: optional field with value" {
     const T = struct { config_path: ?[]const u8 = null };
     const result = try parseArgs(T, std.testing.allocator, &.{ "--config-path", "cfg.toml" }, .{});
     try std.testing.expectEqualStrings("cfg.toml", result.config_path.?);
+}
+
+test "parser: optional field without explicit default" {
+    const T = struct { config_path: ?[]const u8 };
+    const result = try parseArgs(T, std.testing.allocator, &.{}, .{});
+    try std.testing.expect(result.config_path == null);
+}
+
+test "parser: optional field without explicit default with value" {
+    const T = struct { config_path: ?[]const u8 };
+    const result = try parseArgs(T, std.testing.allocator, &.{ "--config-path", "cfg.toml" }, .{});
+    try std.testing.expectEqualStrings("cfg.toml", result.config_path.?);
+}
+
+test "parser: optional integer without explicit default" {
+    const T = struct { port: ?u16 };
+    const result = try parseArgs(T, std.testing.allocator, &.{}, .{});
+    try std.testing.expect(result.port == null);
+}
+
+test "parser: optional integer without explicit default with value" {
+    const T = struct { port: ?u16 };
+    const result = try parseArgs(T, std.testing.allocator, &.{ "--port", "8080" }, .{});
+    try std.testing.expectEqual(@as(u16, 8080), result.port.?);
 }
 
 test "parser: missing required" {

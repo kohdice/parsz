@@ -110,6 +110,9 @@ fn parseWithSubcommand(
             const default = @as(*const field.type, @ptrCast(@alignCast(ptr))).*;
             @field(result, field.name) = default;
             field_set.insert(@field(FieldEnum, field.name));
+        } else if (@typeInfo(field.type) == .optional) {
+            @field(result, field.name) = null;
+            field_set.insert(@field(FieldEnum, field.name));
         }
     }
 
@@ -374,6 +377,32 @@ test "parse: optional subcommand null" {
     const Cli = struct {
         verbose: bool = false,
         command: ?Command = null,
+    };
+
+    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{});
+    try std.testing.expect(result.verbose);
+    try std.testing.expect(result.command == null);
+}
+
+test "parse: optional field without explicit default" {
+    const Cli = struct { config_path: ?[]const u8 };
+    const result = try parse(Cli, std.testing.allocator, &.{}, .{});
+    try std.testing.expect(result.config_path == null);
+}
+
+test "parse: optional field without explicit default with value" {
+    const Cli = struct { config_path: ?[]const u8 };
+    const result = try parse(Cli, std.testing.allocator, &.{ "--config-path", "cfg.toml" }, .{});
+    try std.testing.expectEqualStrings("cfg.toml", result.config_path.?);
+}
+
+test "parse: optional subcommand without explicit default" {
+    const Command = union(enum) {
+        run: struct {},
+    };
+    const Cli = struct {
+        verbose: bool = false,
+        command: ?Command,
     };
 
     const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{});
