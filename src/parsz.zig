@@ -67,9 +67,15 @@ pub fn deinit(
         const fc = comptime getFieldConfig(config, field.name);
         const kind = comptime argKind(field.type, fc);
         if (kind == .multi) {
-            const slice = @field(result, field.name);
-            allocator.free(slice);
-            @field(result, field.name) = &.{};
+            if (comptime @typeInfo(field.type) == .optional) {
+                if (@field(result, field.name)) |s| {
+                    allocator.free(s);
+                }
+                @field(result, field.name) = null;
+            } else {
+                allocator.free(@field(result, field.name));
+                @field(result, field.name) = &.{};
+            }
         } else if (kind == .subcommand) {
             const SubType = comptime unwrapOptional(field.type);
             if (@typeInfo(field.type) == .optional) {
@@ -448,6 +454,14 @@ test "parse: no leak when multi field set but required subcommand missing" {
 
     const result = parse(Cli, std.testing.allocator, &.{ "--ports", "80" }, .{});
     try std.testing.expectError(error.MissingSubcommand, result);
+}
+
+test "parse: deinit optional multi field" {
+    const Cli = struct { ports: ?[]const u16 = null };
+    var result = try parse(Cli, std.testing.allocator, &.{ "--ports", "80", "--ports", "443" }, .{});
+    defer deinit(Cli, &result, std.testing.allocator, .{});
+    try std.testing.expect(result.ports != null);
+    try std.testing.expectEqual(@as(usize, 2), result.ports.?.len);
 }
 
 test {

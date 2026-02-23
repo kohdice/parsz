@@ -500,9 +500,15 @@ pub fn deinitResult(comptime T: type, result: *T, allocator: std.mem.Allocator, 
     inline for (fields) |field| {
         const fc = comptime getFieldConfig(config, field.name);
         if (comptime argKind(field.type, fc) == .multi) {
-            const slice = @field(result, field.name);
-            allocator.free(slice);
-            @field(result, field.name) = &.{};
+            if (comptime @typeInfo(field.type) == .optional) {
+                if (@field(result, field.name)) |s| {
+                    allocator.free(s);
+                }
+                @field(result, field.name) = null;
+            } else {
+                allocator.free(@field(result, field.name));
+                @field(result, field.name) = &.{};
+            }
         }
     }
 }
@@ -729,4 +735,24 @@ test "parser: no leak when multi field set but required field missing" {
         .host = .{ .positional = true },
     });
     try std.testing.expectError(error.MissingRequired, result);
+}
+
+test "parser: optional multi field" {
+    const T = struct { ports: ?[]const u16 = null };
+    var result = try parseArgs(T, std.testing.allocator, &.{ "--ports", "80", "--ports", "443" }, .{});
+    defer deinitResult(T, &result, std.testing.allocator, .{});
+    try std.testing.expect(result.ports != null);
+    try std.testing.expectEqual(@as(usize, 2), result.ports.?.len);
+    try std.testing.expectEqual(@as(u16, 80), result.ports.?[0]);
+    try std.testing.expectEqual(@as(u16, 443), result.ports.?[1]);
+}
+
+test "parser: optional multi field empty" {
+    const T = struct { ports: ?[]const u16 = null };
+    var result = try parseArgs(T, std.testing.allocator, &.{}, .{});
+    defer deinitResult(T, &result, std.testing.allocator, .{});
+    // toOwnedSlice always produces a non-null (possibly empty) slice,
+    // so the default null is overwritten with an empty slice.
+    try std.testing.expect(result.ports != null);
+    try std.testing.expectEqual(@as(usize, 0), result.ports.?.len);
 }
