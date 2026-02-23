@@ -40,6 +40,8 @@ pub fn build(b: *std.Build) void {
         comptime_test_step.dependOn(&ct.step);
     }
 
+    test_step.dependOn(comptime_test_step);
+
     const examples_step = b.step("examples", "Build example programs");
 
     inline for (.{
