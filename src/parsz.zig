@@ -3,13 +3,10 @@ const parser = @import("parser.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 const errors_mod = @import("errors.zig");
 
-pub const Tokenizer = tokenizer_mod.Tokenizer;
-pub const Token = tokenizer_mod.Token;
+const Tokenizer = tokenizer_mod.Tokenizer;
 pub const ParseError = errors_mod.ParseError;
-pub const Diagnostic = errors_mod.Diagnostic;
 pub const FieldConfig = parser.FieldConfig;
-pub const ArgKind = parser.ArgKind;
-pub const argKind = parser.argKind;
+const argKind = parser.argKind;
 
 /// Parse command-line arguments and return a value of type T.
 ///
