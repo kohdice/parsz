@@ -854,6 +854,12 @@ test "nested subcommand no leak on error" {
     try std.testing.expectError(error.MissingRequired, result);
 }
 
+test "parse: bool flag rejects inline value" {
+    const Cli = struct { verbose: bool = false };
+    const result = parse(Cli, std.testing.allocator, &.{"--verbose=false"}, .{});
+    try std.testing.expectError(error.InvalidValue, result);
+}
+
 test {
     _ = @import("parser.zig");
     _ = @import("tokenizer.zig");

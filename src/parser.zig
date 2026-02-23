@@ -396,6 +396,7 @@ pub fn handleLong(
         const ln = comptime longName(field.name, fc);
         if (std.mem.eql(u8, long.name, ln)) {
             if (kind == .flag) {
+                if (long.value != null) return error.InvalidValue;
                 if (comptime fc.action == .count) {
                     if (field_set.contains(@field(FieldEnum, field.name))) {
                         @field(result, field.name) +|= 1;
@@ -830,4 +831,24 @@ test "parser: optional multi field empty" {
     // so the default null is overwritten with an empty slice.
     try std.testing.expect(result.ports != null);
     try std.testing.expectEqual(@as(usize, 0), result.ports.?.len);
+}
+
+test "parser: bool flag rejects inline value" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"--verbose=false"}, .{});
+    try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parser: bool flag rejects inline value arbitrary" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"--verbose=typo"}, .{});
+    try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parser: count flag rejects inline value" {
+    const T = struct { verbose: u8 = 0 };
+    const result = parseArgs(T, std.testing.allocator, &.{"--verbose=1"}, .{
+        .verbose = .{ .short = 'v', .action = .count },
+    });
+    try std.testing.expectError(error.InvalidValue, result);
 }
