@@ -164,6 +164,25 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
             }
         }
     }
+
+    comptime {
+        const Config = @TypeOf(config);
+        const config_info = @typeInfo(Config);
+        if (config_info == .@"struct" and Config != @TypeOf(.{})) {
+            for (config_info.@"struct".fields) |cf| {
+                var found = false;
+                for (fields) |field| {
+                    if (std.mem.eql(u8, cf.name, field.name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    @compileError("unknown config key '" ++ cf.name ++ "' does not match any field in " ++ @typeName(T));
+                }
+            }
+        }
+    }
 }
 
 fn convertValue(comptime T: type, raw: []const u8) ParseError!T {

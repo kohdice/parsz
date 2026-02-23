@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/duplicate_long.zig", "duplicate long option: --output" },
         .{ "test/comptime/count_non_integer.zig", "field 'verbose' uses .count action but has non-integer type 'bool'" },
         .{ "test/comptime/multiple_subcommands.zig", "multiple subcommand fields found: 'cmd1' and 'cmd2'; only one subcommand field is allowed per struct" },
+        .{ "test/comptime/unknown_config_key.zig", "unknown config key 'verbsoe' does not match any field in unknown_config_key.T" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
