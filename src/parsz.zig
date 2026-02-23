@@ -97,6 +97,7 @@ fn parseWithSubcommand(
     comptime subcmd_field_name: []const u8,
 ) (ParseError || error{OutOfMemory})!T {
     @setEvalBranchQuota(10_000);
+    comptime parser.validateConfig(T, config);
 
     const fields = @typeInfo(T).@"struct".fields;
     const FieldEnum = std.meta.FieldEnum(T);

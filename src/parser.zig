@@ -103,7 +103,7 @@ fn longName(comptime field_name: []const u8, comptime fc: FieldConfig) []const u
     return comptime snakeToKebab(field_name);
 }
 
-fn validateConfig(comptime T: type, comptime config: anytype) void {
+pub fn validateConfig(comptime T: type, comptime config: anytype) void {
     const fields = @typeInfo(T).@"struct".fields;
 
     comptime {
