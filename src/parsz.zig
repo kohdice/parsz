@@ -119,6 +119,23 @@ fn parseWithSubcommand(
     const SubUnion = comptime unwrapOptional(subcmd_field.type);
     const sub_fields = @typeInfo(SubUnion).@"union".fields;
 
+    // Track whether subcommand was actually parsed (not just default-initialized).
+    // Default values (e.g. `?Command = null`) are also in field_set, so we
+    // cannot rely on field_set alone to decide whether to deinit on error.
+    var subcmd_parsed = false;
+
+    errdefer {
+        if (subcmd_parsed) {
+            if (@typeInfo(subcmd_field.type) == .optional) {
+                if (@field(result, subcmd_field_name)) |*sub| {
+                    deinitSubcommand(SubUnion, sub, allocator, config, subcmd_field_name);
+                }
+            } else {
+                deinitSubcommand(SubUnion, &@field(result, subcmd_field_name), allocator, config, subcmd_field_name);
+            }
+        }
+    }
+
     var tok = Tokenizer{ .args = argv };
     var positional_index: usize = 0;
 
@@ -150,6 +167,7 @@ fn parseWithSubcommand(
                                 else
                                     @unionInit(SubUnion, sf.name, sub_result);
                             field_set.insert(@field(FieldEnum, subcmd_field_name));
+                            subcmd_parsed = true;
                             tok.index = tok.args.len;
                             found_sub = true;
                         }
@@ -307,6 +325,7 @@ fn deinitSubcommand(
             const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
             var payload = @field(sub, sf.name);
             parser.deinitResult(sf.type, &payload, allocator, sub_config);
+            sub.* = @unionInit(SubUnion, sf.name, payload);
         }
     }
 }
@@ -545,6 +564,83 @@ test "parse: end of options with too many positionals" {
     // "-- file.txt extra" — after --, positional overflow should be TooManyPositionals
     const result = parse(Cli, std.testing.allocator, &.{ "--", "file.txt", "extra" }, config);
     try std.testing.expectError(error.TooManyPositionals, result);
+}
+
+test "parse: no subcommand heap leak on optional subcmd with missing required field" {
+    const Install = struct {
+        packages: []const []const u8 = &.{},
+    };
+    const Command = union(enum) {
+        install: Install,
+    };
+    const Cli = struct {
+        host: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .host = .{ .positional = true },
+        .command = .{
+            .install = .{
+                .packages = .{ .positional = true },
+            },
+        },
+    };
+
+    // Subcommand "install" is parsed (with heap-allocated packages slice),
+    // but top-level required field "host" is missing → MissingRequired.
+    // The errdefer must free the subcommand's multi-field allocation.
+    const result = parse(Cli, std.testing.allocator, &.{ "install", "pkg-a", "pkg-b" }, config);
+    try std.testing.expectError(error.MissingRequired, result);
+}
+
+test "parse: no subcommand heap leak on non-optional subcmd with missing required field" {
+    const Install = struct {
+        packages: []const []const u8 = &.{},
+    };
+    const Command = union(enum) {
+        install: Install,
+    };
+    const Cli = struct {
+        host: []const u8,
+        command: Command,
+    };
+    const config = .{
+        .host = .{ .positional = true },
+        .command = .{
+            .install = .{
+                .packages = .{ .positional = true },
+            },
+        },
+    };
+
+    // Same scenario but with non-optional subcommand field.
+    const result = parse(Cli, std.testing.allocator, &.{ "install", "pkg-a" }, config);
+    try std.testing.expectError(error.MissingRequired, result);
+}
+
+test "parse: deinit subcommand double call safety" {
+    const Install = struct {
+        packages: []const []const u8 = &.{},
+    };
+    const Command = union(enum) {
+        install: Install,
+    };
+    const Cli = struct {
+        command: ?Command = null,
+    };
+    const config = .{
+        .command = .{
+            .install = .{
+                .packages = .{ .positional = true },
+            },
+        },
+    };
+
+    var result = try parse(Cli, std.testing.allocator, &.{ "install", "pkg-a", "pkg-b" }, config);
+    // First deinit frees the allocation and resets via @unionInit writeback.
+    deinit(Cli, &result, std.testing.allocator, config);
+    // Second deinit must be safe (no double free) because payload was reset.
+    deinit(Cli, &result, std.testing.allocator, config);
 }
 
 test {
