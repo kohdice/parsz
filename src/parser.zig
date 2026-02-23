@@ -58,7 +58,7 @@ pub const FieldConfig = struct {
     pub const Action = enum { set, count };
 };
 
-fn getFieldConfig(comptime config: anytype, comptime field_name: []const u8) FieldConfig {
+pub fn getFieldConfig(comptime config: anytype, comptime field_name: []const u8) FieldConfig {
     if (@TypeOf(config) == @TypeOf(.{})) return .{};
     const Config = @TypeOf(config);
     const config_info = @typeInfo(Config);
@@ -88,7 +88,7 @@ fn getFieldConfig(comptime config: anytype, comptime field_name: []const u8) Fie
     return .{};
 }
 
-fn snakeToKebab(comptime name: []const u8) []const u8 {
+pub fn snakeToKebab(comptime name: []const u8) []const u8 {
     comptime {
         var result: []const u8 = "";
         for (name) |c| {
@@ -172,7 +172,7 @@ fn convertValue(comptime T: type, raw: []const u8) ParseError!T {
     @compileError("unsupported value type: " ++ @typeName(T));
 }
 
-fn unwrapOptional(comptime T: type) type {
+pub fn unwrapOptional(comptime T: type) type {
     return switch (@typeInfo(T)) {
         .optional => |opt| opt.child,
         else => T,

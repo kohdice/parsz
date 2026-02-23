@@ -7,6 +7,9 @@ const Tokenizer = tokenizer_mod.Tokenizer;
 pub const ParseError = errors_mod.ParseError;
 pub const FieldConfig = parser.FieldConfig;
 const argKind = parser.argKind;
+const getFieldConfig = parser.getFieldConfig;
+const snakeToKebab = parser.snakeToKebab;
+const unwrapOptional = parser.unwrapOptional;
 
 /// Parse command-line arguments and return a value of type T.
 ///
@@ -217,36 +220,6 @@ fn parseWithSubcommand(
     return result;
 }
 
-fn getFieldConfig(comptime config: anytype, comptime field_name: []const u8) FieldConfig {
-    if (@TypeOf(config) == @TypeOf(.{})) return .{};
-    const Config = @TypeOf(config);
-    const config_info = @typeInfo(Config);
-    if (config_info != .@"struct") return .{};
-
-    inline for (config_info.@"struct".fields) |cf| {
-        if (comptime std.mem.eql(u8, cf.name, field_name)) {
-            const val = @field(config, field_name);
-            const ValType = @TypeOf(val);
-            if (ValType == FieldConfig) return val;
-
-            const val_info = @typeInfo(ValType);
-            if (val_info != .@"struct") return .{};
-
-            var fc = FieldConfig{};
-            inline for (val_info.@"struct".fields) |vf| {
-                if (comptime std.mem.eql(u8, vf.name, "short")) fc.short = @field(val, "short");
-                if (comptime std.mem.eql(u8, vf.name, "long")) fc.long = @field(val, "long");
-                if (comptime std.mem.eql(u8, vf.name, "help")) fc.help = @field(val, "help");
-                if (comptime std.mem.eql(u8, vf.name, "value_name")) fc.value_name = @field(val, "value_name");
-                if (comptime std.mem.eql(u8, vf.name, "positional")) fc.positional = @field(val, "positional");
-                if (comptime std.mem.eql(u8, vf.name, "action")) fc.action = @field(val, "action");
-            }
-            return fc;
-        }
-    }
-    return .{};
-}
-
 /// Retrieve the config for a subcommand variant at comptime.
 /// The return type varies per variant, so callers infer it via anytype.
 fn getSubVariantConfig(comptime config: anytype, comptime subcmd_field_name: []const u8, comptime variant_name: []const u8) SubVariantConfigType(config, subcmd_field_name, variant_name) {
@@ -293,23 +266,6 @@ fn SubVariantConfigType(comptime config: anytype, comptime subcmd_field_name: []
         }
     }
     return @TypeOf(.{});
-}
-
-fn snakeToKebab(comptime name: []const u8) []const u8 {
-    comptime {
-        var result: []const u8 = "";
-        for (name) |c| {
-            result = result ++ (if (c == '_') "-" else &[1]u8{c});
-        }
-        return result;
-    }
-}
-
-fn unwrapOptional(comptime T: type) type {
-    return switch (@typeInfo(T)) {
-        .optional => |opt| opt.child,
-        else => T,
-    };
 }
 
 fn deinitSubcommand(
