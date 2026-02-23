@@ -13,9 +13,47 @@ pub fn build(b: *std.Build) void {
     const lib_tests = b.addTest(.{
         .root_module = mod,
     });
-
     const run_lib_tests = b.addRunArtifact(lib_tests);
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_lib_tests.step);
+
+    const comptime_test_step = b.step("test-comptime", "Run comptime validation tests (expect compile errors)");
+
+    inline for (.{
+        .{ "test/comptime/duplicate_short.zig", "duplicate short option: -v" },
+        .{ "test/comptime/duplicate_long.zig", "duplicate long option: --output" },
+    }) |entry| {
+        const ct = b.addObject(.{
+            .name = "comptime-test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(entry[0]),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "parsz", .module = mod }},
+            }),
+        });
+        ct.expect_errors = .{ .contains = entry[1] };
+        comptime_test_step.dependOn(&ct.step);
+    }
+
+    const examples_step = b.step("examples", "Build example programs");
+
+    inline for (.{
+        .{ "sample", "examples/sample.zig" },
+        .{ "subcommand", "examples/subcommand.zig" },
+        .{ "value_enum", "examples/value_enum.zig" },
+    }) |entry| {
+        const exe = b.addExecutable(.{
+            .name = entry[0],
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(entry[1]),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "parsz", .module = mod }},
+            }),
+        });
+        const install = b.addInstallArtifact(exe, .{});
+        examples_step.dependOn(&install.step);
+    }
 }
