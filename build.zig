@@ -46,6 +46,7 @@ pub fn build(b: *std.Build) void {
         .{ "sample", "examples/sample.zig" },
         .{ "subcommand", "examples/subcommand.zig" },
         .{ "value_enum", "examples/value_enum.zig" },
+        .{ "nested_subcommand", "examples/nested_subcommand.zig" },
     }) |entry| {
         const exe = b.addExecutable(.{
             .name = entry[0],
