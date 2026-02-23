@@ -166,7 +166,7 @@ fn parseWithSubcommand(
                         if (std.mem.eql(u8, slice, comptime snakeToKebab(sf.name))) {
                             const remaining = tok.args[tok.index..];
                             const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
-                            const sub_result = try parser.parseArgs(sf.type, allocator, remaining, sub_config);
+                            const sub_result = try parse(sf.type, allocator, remaining, sub_config);
                             @field(result, subcmd_field_name) =
                                 if (@typeInfo(subcmd_field.type) == .optional)
                                     @unionInit(SubUnion, sf.name, sub_result)
@@ -283,7 +283,7 @@ fn deinitSubcommand(
         if (sub.* == @field(std.meta.FieldEnum(SubUnion), sf.name)) {
             const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
             var payload = @field(sub, sf.name);
-            parser.deinitResult(sf.type, &payload, allocator, sub_config);
+            deinit(sf.type, &payload, allocator, sub_config);
             sub.* = @unionInit(SubUnion, sf.name, payload);
         }
     }
