@@ -628,6 +628,232 @@ test "parse: deinit subcommand double call safety" {
     deinit(Cli, &result, std.testing.allocator, config);
 }
 
+test "nested subcommand basic" {
+    const InnerCommand = union(enum) {
+        add: struct { name: []const u8 },
+        remove: struct { name: []const u8 },
+    };
+    const OuterCommand = union(enum) {
+        remote: struct { command: InnerCommand },
+    };
+    const Cli = struct {
+        verbose: bool = false,
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .remote = .{
+                .command = .{
+                    .add = .{ .name = .{ .positional = true } },
+                    .remove = .{ .name = .{ .positional = true } },
+                },
+            },
+        },
+    };
+
+    const result = try parse(Cli, std.testing.allocator, &.{ "--verbose", "remote", "add", "origin" }, config);
+    try std.testing.expect(result.verbose);
+    switch (result.command) {
+        .remote => |r| switch (r.command) {
+            .add => |a| try std.testing.expectEqualStrings("origin", a.name),
+            .remove => unreachable,
+        },
+    }
+}
+
+test "nested subcommand with positional" {
+    const InnerCommand = union(enum) {
+        add: struct { name: []const u8, url: []const u8 },
+    };
+    const OuterCommand = union(enum) {
+        remote: struct { command: InnerCommand },
+    };
+    const Cli = struct {
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .remote = .{
+                .command = .{
+                    .add = .{
+                        .name = .{ .positional = true },
+                        .url = .{ .positional = true },
+                    },
+                },
+            },
+        },
+    };
+
+    const result = try parse(Cli, std.testing.allocator, &.{ "remote", "add", "origin", "https://example.com" }, config);
+    switch (result.command) {
+        .remote => |r| switch (r.command) {
+            .add => |a| {
+                try std.testing.expectEqualStrings("origin", a.name);
+                try std.testing.expectEqualStrings("https://example.com", a.url);
+            },
+        },
+    }
+}
+
+test "nested subcommand deinit with multi" {
+    const InnerCommand = union(enum) {
+        install: struct { packages: []const []const u8 = &.{} },
+    };
+    const OuterCommand = union(enum) {
+        pkg: struct { command: InnerCommand },
+    };
+    const Cli = struct {
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .pkg = .{
+                .command = .{
+                    .install = .{
+                        .packages = .{ .positional = true },
+                    },
+                },
+            },
+        },
+    };
+
+    var result = try parse(Cli, std.testing.allocator, &.{ "pkg", "install", "foo", "bar" }, config);
+    defer deinit(Cli, &result, std.testing.allocator, config);
+    switch (result.command) {
+        .pkg => |p| switch (p.command) {
+            .install => |i| try std.testing.expectEqual(@as(usize, 2), i.packages.len),
+        },
+    }
+}
+
+test "nested optional subcommand null" {
+    const InnerCommand = union(enum) {
+        add: struct { name: []const u8 },
+    };
+    const OuterCommand = union(enum) {
+        remote: struct { command: ?InnerCommand = null },
+    };
+    const Cli = struct {
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .remote = .{
+                .command = .{
+                    .add = .{ .name = .{ .positional = true } },
+                },
+            },
+        },
+    };
+
+    const result = try parse(Cli, std.testing.allocator, &.{"remote"}, config);
+    switch (result.command) {
+        .remote => |r| try std.testing.expect(r.command == null),
+    }
+}
+
+test "nested missing required subcommand" {
+    const InnerCommand = union(enum) {
+        add: struct {},
+        remove: struct {},
+    };
+    const OuterCommand = union(enum) {
+        remote: struct { command: InnerCommand },
+    };
+    const Cli = struct {
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .remote = .{
+                .command = .{},
+            },
+        },
+    };
+
+    const result = parse(Cli, std.testing.allocator, &.{"remote"}, config);
+    try std.testing.expectError(error.MissingSubcommand, result);
+}
+
+test "nested unknown subcommand error" {
+    const InnerCommand = union(enum) {
+        add: struct {},
+    };
+    const OuterCommand = union(enum) {
+        remote: struct { command: InnerCommand },
+    };
+    const Cli = struct {
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .remote = .{
+                .command = .{},
+            },
+        },
+    };
+
+    const result = parse(Cli, std.testing.allocator, &.{ "remote", "bogus" }, config);
+    try std.testing.expectError(error.UnknownSubcommand, result);
+}
+
+test "nested unknown flag error" {
+    const InnerCommand = union(enum) {
+        add: struct { name: []const u8 },
+    };
+    const OuterCommand = union(enum) {
+        remote: struct { command: InnerCommand },
+    };
+    const Cli = struct {
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .remote = .{
+                .command = .{
+                    .add = .{ .name = .{ .positional = true } },
+                },
+            },
+        },
+    };
+
+    const result = parse(Cli, std.testing.allocator, &.{ "remote", "add", "--nonexistent" }, config);
+    try std.testing.expectError(error.UnknownFlag, result);
+}
+
+test "nested subcommand no leak on error" {
+    const InnerCommand = union(enum) {
+        install: struct { packages: []const []const u8 = &.{} },
+    };
+    const OuterCommand = union(enum) {
+        pkg: struct {
+            required_field: []const u8,
+            command: InnerCommand,
+        },
+    };
+    const Cli = struct {
+        command: OuterCommand,
+    };
+    const config = .{
+        .command = .{
+            .pkg = .{
+                .required_field = .{ .positional = true },
+                .command = .{
+                    .install = .{
+                        .packages = .{ .positional = true },
+                    },
+                },
+            },
+        },
+    };
+
+    // "pkg install foo bar" — subcommand "install" is parsed with heap-allocated
+    // packages, but the outer struct's required_field is missing → MissingRequired.
+    // The errdefer chain must free the nested multi-field allocation.
+    const result = parse(Cli, std.testing.allocator, &.{ "pkg", "install", "foo", "bar" }, config);
+    try std.testing.expectError(error.MissingRequired, result);
+}
+
 test {
     _ = @import("parser.zig");
     _ = @import("tokenizer.zig");
