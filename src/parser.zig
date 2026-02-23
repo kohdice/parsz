@@ -148,6 +148,22 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
             }
         }
     }
+
+    comptime {
+        var subcommand_count: usize = 0;
+        var first_subcmd_name: []const u8 = "";
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            if (argKind(field.type, fc) == .subcommand) {
+                if (subcommand_count == 0) {
+                    first_subcmd_name = field.name;
+                } else {
+                    @compileError("multiple subcommand fields found: '" ++ first_subcmd_name ++ "' and '" ++ field.name ++ "'; only one subcommand field is allowed per struct");
+                }
+                subcommand_count += 1;
+            }
+        }
+    }
 }
 
 fn convertValue(comptime T: type, raw: []const u8) ParseError!T {
