@@ -158,10 +158,11 @@ fn parseWithSubcommand(
         }
     }
 
+    // Mark multi fields as set before required-field check to prevent
+    // leaking toOwnedSlice allocations when a required field is missing.
     inline for (fields) |field| {
         const fc = comptime getFieldConfig(config, field.name);
         if (comptime argKind(field.type, fc) == .multi) {
-            @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
             field_set.insert(@field(FieldEnum, field.name));
         }
     }
@@ -179,6 +180,13 @@ fn parseWithSubcommand(
             } else {
                 return error.MissingRequired;
             }
+        }
+    }
+
+    inline for (fields) |field| {
+        const fc = comptime getFieldConfig(config, field.name);
+        if (comptime argKind(field.type, fc) == .multi) {
+            @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
         }
     }
 
@@ -427,6 +435,19 @@ test "parse: enum option" {
 
     const result = try parse(Cli, std.testing.allocator, &.{ "--mode", "fast" }, .{});
     try std.testing.expectEqual(Mode.fast, result.mode);
+}
+
+test "parse: no leak when multi field set but required subcommand missing" {
+    const Command = union(enum) {
+        run: struct {},
+    };
+    const Cli = struct {
+        ports: []const u16 = &.{},
+        command: Command,
+    };
+
+    const result = parse(Cli, std.testing.allocator, &.{ "--ports", "80" }, .{});
+    try std.testing.expectError(error.MissingSubcommand, result);
 }
 
 test {

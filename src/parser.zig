@@ -289,10 +289,13 @@ pub fn parseArgs(
             return error.TooManyPositionals;
     }
 
+    // Mark multi fields as set before required-field check.
+    // Multi fields always produce a valid (possibly empty) slice,
+    // so they are never "missing". This must happen before the
+    // required check to avoid leaking toOwnedSlice allocations on error.
     inline for (fields) |field| {
         const fc = comptime getFieldConfig(config, field.name);
         if (comptime argKind(field.type, fc) == .multi) {
-            @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
             field_set.insert(@field(FieldEnum, field.name));
         }
     }
@@ -309,6 +312,13 @@ pub fn parseArgs(
                 return error.MissingSubcommand;
             }
             return error.MissingRequired;
+        }
+    }
+
+    inline for (fields) |field| {
+        const fc = comptime getFieldConfig(config, field.name);
+        if (comptime argKind(field.type, fc) == .multi) {
+            @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
         }
     }
 
@@ -708,4 +718,15 @@ test "parser: short option with separate value" {
         .output = .{ .short = 'o' },
     });
     try std.testing.expectEqualStrings("file.txt", result.output);
+}
+
+test "parser: no leak when multi field set but required field missing" {
+    const T = struct {
+        ports: []const u16 = &.{},
+        host: []const u8,
+    };
+    const result = parseArgs(T, std.testing.allocator, &.{ "--ports", "80", "--ports", "443" }, .{
+        .host = .{ .positional = true },
+    });
+    try std.testing.expectError(error.MissingRequired, result);
 }
