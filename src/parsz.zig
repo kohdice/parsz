@@ -181,7 +181,7 @@ fn parseWithSubcommand(
                 }
                 if (!found_sub) {
                     if (!try parser.handlePositional(T, config, &result, &field_set, &lists, &positional_index, val, allocator))
-                        return if (positional_index > 0) error.TooManyPositionals else error.UnknownSubcommand;
+                        return if (sub_fields.len > 0 and !subcmd_parsed and !tok.options_ended) error.UnknownSubcommand else error.TooManyPositionals;
                 }
             },
             .end_of_options => {},
@@ -507,7 +507,7 @@ test "parse: end of options with flags and subcommand name" {
     try std.testing.expect(result.command == null);
 }
 
-test "parse: too many positionals in subcommand path" {
+test "parse: unresolved subcommand reports UnknownSubcommand" {
     const Command = union(enum) { run: struct {} };
     const Cli = struct {
         input: []const u8,
@@ -518,9 +518,9 @@ test "parse: too many positionals in subcommand path" {
         .command = .{},
     };
 
-    // "file.txt extra" — first positional fills input, second is excess
+    // "file.txt extra" — first positional fills input, second is unknown subcommand
     const result = parse(Cli, std.testing.allocator, &.{ "file.txt", "extra" }, config);
-    try std.testing.expectError(error.TooManyPositionals, result);
+    try std.testing.expectError(error.UnknownSubcommand, result);
 }
 
 test "parse: unknown subcommand" {
@@ -858,6 +858,39 @@ test "parse: bool flag rejects inline value" {
     const Cli = struct { verbose: bool = false };
     const result = parse(Cli, std.testing.allocator, &.{"--verbose=false"}, .{});
     try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parse: positional plus invalid subcommand name" {
+    const Command = union(enum) { run: struct {} };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "file.txt bogus" — first positional fills input, "bogus" is unknown subcommand
+    const result = parse(Cli, std.testing.allocator, &.{ "file.txt", "bogus" }, config);
+    try std.testing.expectError(error.UnknownSubcommand, result);
+}
+
+test "parse: subcommand parsed then extra positional" {
+    const Run = struct { file: []const u8 };
+    const Command = union(enum) { run: Run };
+    const Cli = struct {
+        command: Command,
+    };
+    const config = .{
+        .command = .{
+            .run = .{ .file = .{ .positional = true } },
+        },
+    };
+
+    // "run file.txt extra" — subcommand parsed, extra positional in sub-parser → TooManyPositionals
+    const result = parse(Cli, std.testing.allocator, &.{ "run", "file.txt", "extra" }, config);
+    try std.testing.expectError(error.TooManyPositionals, result);
 }
 
 test {
