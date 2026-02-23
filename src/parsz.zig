@@ -141,24 +141,26 @@ fn parseWithSubcommand(
             .positional => |val| {
                 const slice: []const u8 = val;
                 var found_sub = false;
-                inline for (sub_fields) |sf| {
-                    if (std.mem.eql(u8, slice, comptime snakeToKebab(sf.name))) {
-                        const remaining = tok.args[tok.index..];
-                        const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
-                        const sub_result = try parser.parseArgs(sf.type, allocator, remaining, sub_config);
-                        @field(result, subcmd_field_name) =
-                            if (@typeInfo(subcmd_field.type) == .optional)
-                                @unionInit(SubUnion, sf.name, sub_result)
-                            else
-                                @unionInit(SubUnion, sf.name, sub_result);
-                        field_set.insert(@field(FieldEnum, subcmd_field_name));
-                        tok.index = tok.args.len;
-                        found_sub = true;
+                if (!tok.options_ended) {
+                    inline for (sub_fields) |sf| {
+                        if (std.mem.eql(u8, slice, comptime snakeToKebab(sf.name))) {
+                            const remaining = tok.args[tok.index..];
+                            const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
+                            const sub_result = try parser.parseArgs(sf.type, allocator, remaining, sub_config);
+                            @field(result, subcmd_field_name) =
+                                if (@typeInfo(subcmd_field.type) == .optional)
+                                    @unionInit(SubUnion, sf.name, sub_result)
+                                else
+                                    @unionInit(SubUnion, sf.name, sub_result);
+                            field_set.insert(@field(FieldEnum, subcmd_field_name));
+                            tok.index = tok.args.len;
+                            found_sub = true;
+                        }
                     }
                 }
                 if (!found_sub) {
                     if (!try parser.handlePositional(T, config, &result, &field_set, &lists, &positional_index, val, allocator))
-                        return error.UnknownSubcommand;
+                        return if (positional_index > 0) error.TooManyPositionals else error.UnknownSubcommand;
                 }
             },
             .end_of_options => {},
@@ -463,6 +465,89 @@ test "parse: deinit optional multi field" {
     defer deinit(Cli, &result, std.testing.allocator, .{});
     try std.testing.expect(result.ports != null);
     try std.testing.expectEqual(@as(usize, 2), result.ports.?.len);
+}
+
+test "parse: end of options prevents subcommand matching" {
+    const Run = struct { file: []const u8 };
+    const Command = union(enum) { run: Run };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{ .run = .{ .file = .{ .positional = true } } },
+    };
+
+    // "-- run" should treat "run" as positional input, not as subcommand
+    const result = try parse(Cli, std.testing.allocator, &.{ "--", "run" }, config);
+    try std.testing.expectEqualStrings("run", result.input);
+    try std.testing.expect(result.command == null);
+}
+
+test "parse: end of options with flags and subcommand name" {
+    const Push = struct { force: bool = false };
+    const Command = union(enum) { push: Push };
+    const Cli = struct {
+        verbose: bool = false,
+        target: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .verbose = .{ .short = 'v' },
+        .target = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "--verbose -- push" should treat "push" as positional target
+    const result = try parse(Cli, std.testing.allocator, &.{ "--verbose", "--", "push" }, config);
+    try std.testing.expect(result.verbose);
+    try std.testing.expectEqualStrings("push", result.target);
+    try std.testing.expect(result.command == null);
+}
+
+test "parse: too many positionals in subcommand path" {
+    const Command = union(enum) { run: struct {} };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "file.txt extra" — first positional fills input, second is excess
+    const result = parse(Cli, std.testing.allocator, &.{ "file.txt", "extra" }, config);
+    try std.testing.expectError(error.TooManyPositionals, result);
+}
+
+test "parse: unknown subcommand" {
+    const Command = union(enum) { run: struct {} };
+    const Cli = struct {
+        command: Command,
+    };
+    const config = .{ .command = .{} };
+
+    // "bogus" matches no subcommand and no positional field
+    const result = parse(Cli, std.testing.allocator, &.{"bogus"}, config);
+    try std.testing.expectError(error.UnknownSubcommand, result);
+}
+
+test "parse: end of options with too many positionals" {
+    const Command = union(enum) { run: struct {} };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "-- file.txt extra" — after --, positional overflow should be TooManyPositionals
+    const result = parse(Cli, std.testing.allocator, &.{ "--", "file.txt", "extra" }, config);
+    try std.testing.expectError(error.TooManyPositionals, result);
 }
 
 test {
