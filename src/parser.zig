@@ -137,6 +137,17 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
             }
         }
     }
+
+    comptime {
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            if (fc.action == .count) {
+                if (@typeInfo(field.type) != .int) {
+                    @compileError("field '" ++ field.name ++ "' uses .count action but has non-integer type '" ++ @typeName(field.type) ++ "'");
+                }
+            }
+        }
+    }
 }
 
 fn convertValue(comptime T: type, raw: []const u8) ParseError!T {

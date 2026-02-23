@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     inline for (.{
         .{ "test/comptime/duplicate_short.zig", "duplicate short option: -v" },
         .{ "test/comptime/duplicate_long.zig", "duplicate long option: --output" },
+        .{ "test/comptime/count_non_integer.zig", "field 'verbose' uses .count action but has non-integer type 'bool'" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
