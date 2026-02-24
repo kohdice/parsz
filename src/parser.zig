@@ -187,6 +187,43 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
     }
 
     comptime {
+        const Config = @TypeOf(config);
+        const config_info = @typeInfo(Config);
+        if (config_info == .@"struct" and Config != @TypeOf(.{})) {
+            for (fields) |field| {
+                const fc = getFieldConfig(config, field.name);
+                const kind = argKind(field.type, fc);
+                // Skip subcommand fields — their config values contain
+                // variant names (e.g. .clone, .push), not FieldConfig keys.
+                if (kind == .subcommand) continue;
+
+                for (config_info.@"struct".fields) |cf| {
+                    if (std.mem.eql(u8, cf.name, field.name)) {
+                        const val = @field(config, field.name);
+                        const ValType = @TypeOf(val);
+                        if (ValType == FieldConfig) break;
+                        const val_info = @typeInfo(ValType);
+                        if (val_info != .@"struct") break;
+
+                        for (val_info.@"struct".fields) |vf| {
+                            const is_known = blk: {
+                                for (@typeInfo(FieldConfig).@"struct".fields) |fc_field| {
+                                    if (std.mem.eql(u8, vf.name, fc_field.name)) break :blk true;
+                                }
+                                break :blk false;
+                            };
+                            if (!is_known) {
+                                @compileError("unknown field config key '" ++ vf.name ++ "' for field '" ++ field.name ++ "'");
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    comptime {
         for (fields) |field| {
             const F = field.type;
             const is_bare_union = @typeInfo(F) == .@"union" and !isSubcommandType(F);
