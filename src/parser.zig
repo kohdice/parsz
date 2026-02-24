@@ -128,7 +128,7 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
         for (fields) |field| {
             const fc = getFieldConfig(config, field.name);
             const kind = argKind(field.type, fc);
-            if (kind == .flag or kind == .option or kind == .multi) {
+            if (kind == .flag or kind == .option or (kind == .multi and !fc.positional)) {
                 const ln = longName(field.name, fc);
                 for (longs_used) |existing| {
                     if (std.mem.eql(u8, existing, ln)) {
@@ -481,7 +481,7 @@ pub fn handleLong(
         const fc = comptime getFieldConfig(config, field.name);
         const kind = comptime argKind(field.type, fc);
 
-        if (kind == .subcommand or kind == .positional) continue;
+        if (kind == .subcommand or kind == .positional or (kind == .multi and fc.positional)) continue;
 
         const ln = comptime longName(field.name, fc);
         if (std.mem.eql(u8, long.name, ln)) {
@@ -545,9 +545,12 @@ pub fn handleShort(
 
     inline for (fields) |field| {
         const fc = comptime getFieldConfig(config, field.name);
+        const kind = comptime argKind(field.type, fc);
+
+        if (kind == .subcommand or kind == .positional or (kind == .multi and fc.positional)) continue;
+
         if (comptime fc.short) |s| {
             if (s == ch) {
-                const kind = comptime argKind(field.type, fc);
                 if (kind == .flag) {
                     if (comptime fc.action == .count) {
                         if (field_set.contains(@field(FieldEnum, field.name))) {
