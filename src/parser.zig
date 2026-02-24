@@ -268,6 +268,20 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
             }
         }
     }
+
+    comptime {
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            if (fc.positional) {
+                if (fc.short != null) {
+                    @compileError("field '" ++ field.name ++ "' has both .positional = true and .short option; positional fields cannot have short options");
+                }
+                if (fc.long != null) {
+                    @compileError("field '" ++ field.name ++ "' has both .positional = true and explicit .long option; positional fields cannot have long options");
+                }
+            }
+        }
+    }
 }
 
 fn convertValue(comptime T: type, raw: []const u8) ParseError!T {
