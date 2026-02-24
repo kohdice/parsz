@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/optional_untagged_union.zig", "untagged union; union fields must be tagged (union(enum))" },
         .{ "test/comptime/positional_after_multi.zig", "multi-value positional must be the last positional field" },
         .{ "test/comptime/duplicate_multi_positional.zig", "only one multi-value positional is allowed" },
+        .{ "test/comptime/count_positional.zig", "mutually exclusive" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
