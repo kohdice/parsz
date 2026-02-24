@@ -125,6 +125,39 @@ fn parseWithSubcommand(
     const SubUnion = comptime unwrapOptional(subcmd_field.type);
     const sub_fields = @typeInfo(SubUnion).@"union".fields;
 
+    // Validate that subcommand config keys match union variant names.
+    comptime {
+        const Config = @TypeOf(config);
+        const config_info = @typeInfo(Config);
+        if (config_info == .@"struct" and Config != @TypeOf(.{})) {
+            for (config_info.@"struct".fields) |cf| {
+                if (std.mem.eql(u8, cf.name, subcmd_field_name)) {
+                    const subcmd_config = @field(config, subcmd_field_name);
+                    const SubConfig = @TypeOf(subcmd_config);
+                    const sub_config_info = @typeInfo(SubConfig);
+                    if (sub_config_info == .@"struct" and SubConfig != @TypeOf(.{})) {
+                        for (sub_config_info.@"struct".fields) |vcf| {
+                            var found = false;
+                            for (sub_fields) |sf| {
+                                if (std.mem.eql(u8, vcf.name, sf.name)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                @compileError(
+                                    "unknown subcommand config key '" ++ vcf.name ++
+                                        "' does not match any variant in " ++ @typeName(SubUnion),
+                                );
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     // Track whether subcommand was actually parsed (not just default-initialized).
     // Default values (e.g. `?Command = null`) are also in field_set, so we
     // cannot rely on field_set alone to decide whether to deinit on error.
