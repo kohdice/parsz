@@ -302,6 +302,21 @@ fn parseWithSubcommand(
         }
     }
 
+    // Normalize multi-field defaults inside unparsed subcommand payloads.
+    // When a subcommand is NOT parsed from argv, its payload retains default
+    // values that may contain static/comptime slices. These must be heap-
+    // duplicated so that `deinit` can safely call `allocator.free()`.
+    if (!subcmd_parsed) {
+        if (comptime @typeInfo(subcmd_field.type) == .optional) {
+            if (@field(result, subcmd_field_name)) |*sub| {
+                try normalizeSubcommandMultiDefaults(SubUnion, sub, allocator, config, subcmd_field_name);
+                @field(result, subcmd_field_name) = sub.*;
+            }
+        } else if (comptime subcmd_field.default_value_ptr != null) {
+            try normalizeSubcommandMultiDefaults(SubUnion, &@field(result, subcmd_field_name), allocator, config, subcmd_field_name);
+        }
+    }
+
     return result;
 }
 
@@ -366,6 +381,103 @@ fn deinitSubcommand(
             const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
             var payload = @field(sub, sf.name);
             deinit(sf.type, &payload, allocator, sub_config);
+            sub.* = @unionInit(SubUnion, sf.name, payload);
+        }
+    }
+}
+
+/// Copy static/comptime multi-field slices to heap so that `deinit` can
+/// uniformly call `allocator.free()` on every multi field.  This mirrors
+/// the finalization performed by `parseArgs` but operates on an already-
+/// initialized struct whose multi fields may still point to read-only
+/// comptime memory (e.g. a default value such as `&.{"foo"}`).
+fn normalizeMultiDefaults(
+    comptime T: type,
+    result: *T,
+    allocator: std.mem.Allocator,
+    comptime config: anytype,
+) error{OutOfMemory}!void {
+    const fields = @typeInfo(T).@"struct".fields;
+    const FieldEnum = std.meta.FieldEnum(T);
+
+    // Track which fields have been heap-duped so we can free them on OOM.
+    var normalized = std.EnumSet(FieldEnum).initEmpty();
+    errdefer {
+        inline for (fields) |field| {
+            const fc = comptime getFieldConfig(config, field.name);
+            const kind = comptime argKind(field.type, fc);
+            if (kind == .multi) {
+                if (normalized.contains(@field(FieldEnum, field.name))) {
+                    if (comptime @typeInfo(field.type) == .optional) {
+                        if (@field(result, field.name)) |s| allocator.free(s);
+                    } else {
+                        allocator.free(@field(result, field.name));
+                    }
+                }
+            } else if (kind == .subcommand) {
+                if (normalized.contains(@field(FieldEnum, field.name))) {
+                    const SubType = comptime unwrapOptional(field.type);
+                    if (@typeInfo(field.type) == .optional) {
+                        if (@field(result, field.name)) |*sub| {
+                            deinitSubcommand(SubType, sub, allocator, config, field.name);
+                        }
+                    } else {
+                        deinitSubcommand(SubType, &@field(result, field.name), allocator, config, field.name);
+                    }
+                }
+            }
+        }
+    }
+
+    inline for (fields) |field| {
+        const fc = comptime getFieldConfig(config, field.name);
+        const kind = comptime argKind(field.type, fc);
+        if (kind == .multi) {
+            const Child = comptime parser.sliceChild(field.type);
+            if (comptime @typeInfo(field.type) == .optional) {
+                if (@field(result, field.name)) |slice| {
+                    if (slice.len > 0) {
+                        @field(result, field.name) = try allocator.dupe(Child, slice);
+                        normalized.insert(@field(FieldEnum, field.name));
+                    }
+                }
+            } else {
+                const slice = @field(result, field.name);
+                if (slice.len > 0) {
+                    @field(result, field.name) = try allocator.dupe(Child, slice);
+                    normalized.insert(@field(FieldEnum, field.name));
+                }
+            }
+        } else if (kind == .subcommand) {
+            const SubType = comptime unwrapOptional(field.type);
+            if (@typeInfo(field.type) == .optional) {
+                if (@field(result, field.name)) |*sub| {
+                    try normalizeSubcommandMultiDefaults(SubType, sub, allocator, config, field.name);
+                    normalized.insert(@field(FieldEnum, field.name));
+                }
+            } else {
+                try normalizeSubcommandMultiDefaults(SubType, &@field(result, field.name), allocator, config, field.name);
+                normalized.insert(@field(FieldEnum, field.name));
+            }
+        }
+    }
+}
+
+/// Normalize multi-field defaults inside a subcommand union payload.
+/// Mirrors `deinitSubcommand` but heap-duplicates instead of freeing.
+fn normalizeSubcommandMultiDefaults(
+    comptime SubUnion: type,
+    sub: *SubUnion,
+    allocator: std.mem.Allocator,
+    comptime config: anytype,
+    comptime subcmd_field_name: []const u8,
+) error{OutOfMemory}!void {
+    const sub_ufields = @typeInfo(SubUnion).@"union".fields;
+    inline for (sub_ufields) |sf| {
+        if (sub.* == @field(std.meta.FieldEnum(SubUnion), sf.name)) {
+            const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
+            var payload = @field(sub, sf.name);
+            try normalizeMultiDefaults(sf.type, &payload, allocator, sub_config);
             sub.* = @unionInit(SubUnion, sf.name, payload);
         }
     }
