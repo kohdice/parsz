@@ -214,7 +214,7 @@ pub fn unwrapOptional(comptime T: type) type {
     };
 }
 
-fn sliceChild(comptime T: type) type {
+pub fn sliceChild(comptime T: type) type {
     const info = @typeInfo(T);
     if (info == .optional) return sliceChild(info.optional.child);
     return info.pointer.child;
@@ -364,10 +364,52 @@ pub fn parseArgs(
         }
     }
 
+    // Track which multi fields have been heap-allocated during finalization.
+    // errdefer inside inline for is block-scoped per iteration and does not
+    // accumulate, so we use a single errdefer outside the loop with an EnumSet.
+    var finalized_multi = std.EnumSet(FieldEnum).initEmpty();
+    errdefer {
+        inline for (fields) |field| {
+            const fc = comptime getFieldConfig(config, field.name);
+            if (comptime argKind(field.type, fc) == .multi) {
+                if (finalized_multi.contains(@field(FieldEnum, field.name))) {
+                    if (comptime @typeInfo(field.type) == .optional) {
+                        if (@field(result, field.name)) |s| allocator.free(s);
+                    } else {
+                        allocator.free(@field(result, field.name));
+                    }
+                }
+            }
+        }
+    }
+
     inline for (fields) |field| {
         const fc = comptime getFieldConfig(config, field.name);
         if (comptime argKind(field.type, fc) == .multi) {
-            @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
+            if (@field(lists, field.name).items.len == 0 and field.default_value_ptr != null) {
+                // Preserve default. Copy non-empty defaults to heap for uniform deinit.
+                const Child = comptime sliceChild(field.type);
+                if (comptime @typeInfo(field.type) == .optional) {
+                    if (@field(result, field.name)) |default_slice| {
+                        if (default_slice.len > 0) {
+                            @field(result, field.name) = try allocator.dupe(Child, default_slice);
+                            finalized_multi.insert(@field(FieldEnum, field.name));
+                        }
+                        // len == 0: keep &.{}, free is no-op
+                    }
+                    // null: keep null, deinit skips null
+                } else {
+                    const default_slice = @field(result, field.name);
+                    if (default_slice.len > 0) {
+                        @field(result, field.name) = try allocator.dupe(Child, default_slice);
+                        finalized_multi.insert(@field(FieldEnum, field.name));
+                    }
+                    // len == 0: keep &.{}, free is no-op
+                }
+            } else {
+                @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
+                finalized_multi.insert(@field(FieldEnum, field.name));
+            }
         }
     }
 
@@ -827,10 +869,8 @@ test "parser: optional multi field empty" {
     const T = struct { ports: ?[]const u16 = null };
     var result = try parseArgs(T, std.testing.allocator, &.{}, .{});
     defer deinitResult(T, &result, std.testing.allocator, .{});
-    // toOwnedSlice always produces a non-null (possibly empty) slice,
-    // so the default null is overwritten with an empty slice.
-    try std.testing.expect(result.ports != null);
-    try std.testing.expectEqual(@as(usize, 0), result.ports.?.len);
+    // Default null is preserved when no values are specified.
+    try std.testing.expect(result.ports == null);
 }
 
 test "parser: bool flag rejects inline value" {
@@ -851,4 +891,42 @@ test "parser: count flag rejects inline value" {
         .verbose = .{ .short = 'v', .action = .count },
     });
     try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parser: multi field preserves non-empty default" {
+    const T = struct { ports: []const u16 = &.{ 80, 443 } };
+    var result = try parseArgs(T, std.testing.allocator, &.{}, .{});
+    defer deinitResult(T, &result, std.testing.allocator, .{});
+    try std.testing.expectEqual(@as(usize, 2), result.ports.len);
+    try std.testing.expectEqual(@as(u16, 80), result.ports[0]);
+    try std.testing.expectEqual(@as(u16, 443), result.ports[1]);
+}
+
+test "parser: multi field default overridden when values specified" {
+    const T = struct { ports: []const u16 = &.{ 80, 443 } };
+    var result = try parseArgs(T, std.testing.allocator, &.{ "--ports", "8080" }, .{});
+    defer deinitResult(T, &result, std.testing.allocator, .{});
+    try std.testing.expectEqual(@as(usize, 1), result.ports.len);
+    try std.testing.expectEqual(@as(u16, 8080), result.ports[0]);
+}
+
+test "parser: no leak on OOM during multi field finalization" {
+    const T = struct {
+        ports: []const u16 = &.{},
+        tags: []const []const u8 = &.{},
+    };
+    const argv: []const [:0]const u8 = &.{ "--ports", "80", "--tags", "web" };
+
+    for (0..20) |fail_index| {
+        var failing_allocator_state = std.testing.FailingAllocator.init(std.testing.allocator, .{
+            .fail_index = fail_index,
+        });
+        if (parseArgs(T, failing_allocator_state.allocator(), argv, .{})) |r| {
+            var result = r;
+            deinitResult(T, &result, failing_allocator_state.allocator(), .{});
+            break;
+        } else |_| {
+            // Expected OOM — std.testing.allocator detects leaks automatically.
+        }
+    }
 }

@@ -253,10 +253,52 @@ fn parseWithSubcommand(
         }
     }
 
+    // Track which multi fields have been heap-allocated during finalization.
+    // errdefer inside inline for is block-scoped per iteration and does not
+    // accumulate, so we use a single errdefer outside the loop with an EnumSet.
+    var finalized_multi = std.EnumSet(FieldEnum).initEmpty();
+    errdefer {
+        inline for (fields) |field| {
+            const fc = comptime getFieldConfig(config, field.name);
+            if (comptime argKind(field.type, fc) == .multi) {
+                if (finalized_multi.contains(@field(FieldEnum, field.name))) {
+                    if (comptime @typeInfo(field.type) == .optional) {
+                        if (@field(result, field.name)) |s| allocator.free(s);
+                    } else {
+                        allocator.free(@field(result, field.name));
+                    }
+                }
+            }
+        }
+    }
+
     inline for (fields) |field| {
         const fc = comptime getFieldConfig(config, field.name);
         if (comptime argKind(field.type, fc) == .multi) {
-            @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
+            if (@field(lists, field.name).items.len == 0 and field.default_value_ptr != null) {
+                // Preserve default. Copy non-empty defaults to heap for uniform deinit.
+                const Child = comptime parser.sliceChild(field.type);
+                if (comptime @typeInfo(field.type) == .optional) {
+                    if (@field(result, field.name)) |default_slice| {
+                        if (default_slice.len > 0) {
+                            @field(result, field.name) = try allocator.dupe(Child, default_slice);
+                            finalized_multi.insert(@field(FieldEnum, field.name));
+                        }
+                        // len == 0: keep &.{}, free is no-op
+                    }
+                    // null: keep null, deinit skips null
+                } else {
+                    const default_slice = @field(result, field.name);
+                    if (default_slice.len > 0) {
+                        @field(result, field.name) = try allocator.dupe(Child, default_slice);
+                        finalized_multi.insert(@field(FieldEnum, field.name));
+                    }
+                    // len == 0: keep &.{}, free is no-op
+                }
+            } else {
+                @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
+                finalized_multi.insert(@field(FieldEnum, field.name));
+            }
         }
     }
 
