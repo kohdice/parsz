@@ -25,13 +25,15 @@ pub fn argKind(comptime F: type, comptime fc: FieldConfig) ArgKind {
 }
 
 fn isSubcommandType(comptime T: type) bool {
-    return @typeInfo(T) == .@"union";
+    const info = @typeInfo(T);
+    if (info != .@"union") return false;
+    return info.@"union".tag_type != null;
 }
 
 fn isOptionalSubcommandType(comptime T: type) bool {
     const info = @typeInfo(T);
     if (info != .optional) return false;
-    return @typeInfo(info.optional.child) == .@"union";
+    return isSubcommandType(info.optional.child);
 }
 
 fn isSliceOfNonU8(comptime T: type) bool {
@@ -180,6 +182,24 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
                 if (!found) {
                     @compileError("unknown config key '" ++ cf.name ++ "' does not match any field in " ++ @typeName(T));
                 }
+            }
+        }
+    }
+
+    comptime {
+        for (fields) |field| {
+            const F = field.type;
+            const is_bare_union = @typeInfo(F) == .@"union" and !isSubcommandType(F);
+            const is_optional_bare_union = blk: {
+                const fi = @typeInfo(F);
+                if (fi != .optional) break :blk false;
+                break :blk @typeInfo(fi.optional.child) == .@"union" and !isSubcommandType(fi.optional.child);
+            };
+            if (is_bare_union) {
+                @compileError("field '" ++ field.name ++ "' has type '" ++ @typeName(F) ++ "' which is an untagged union; union fields must be tagged (union(enum))");
+            }
+            if (is_optional_bare_union) {
+                @compileError("field '" ++ field.name ++ "' has type '" ++ @typeName(F) ++ "' which wraps an untagged union; union fields must be tagged (union(enum))");
             }
         }
     }
@@ -908,6 +928,21 @@ test "parser: multi field default overridden when values specified" {
     defer deinitResult(T, &result, std.testing.allocator, .{});
     try std.testing.expectEqual(@as(usize, 1), result.ports.len);
     try std.testing.expectEqual(@as(u16, 8080), result.ports[0]);
+}
+
+test "parser: tagged union subcommand still works after strictening" {
+    // Verify that isSubcommandType and isOptionalSubcommandType correctly
+    // classify union(enum) as .subcommand after the strictening change.
+    const Command = union(enum) {
+        run: struct {},
+        build: struct {},
+    };
+    try std.testing.expectEqual(ArgKind.subcommand, comptime argKind(Command, .{}));
+    try std.testing.expectEqual(ArgKind.subcommand, comptime argKind(?Command, .{}));
+
+    // Untagged union should NOT be classified as subcommand.
+    const BadUnion = union { a: i32, b: f64 };
+    try std.testing.expectEqual(ArgKind.option, comptime argKind(BadUnion, .{}));
 }
 
 test "parser: no leak on OOM during multi field finalization" {
