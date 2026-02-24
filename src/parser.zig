@@ -203,6 +203,25 @@ pub fn validateConfig(comptime T: type, comptime config: anytype) void {
             }
         }
     }
+
+    comptime {
+        var seen_multi_positional = false;
+        var multi_positional_name: []const u8 = "";
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            const kind = argKind(field.type, fc);
+            if (kind == .positional and seen_multi_positional) {
+                @compileError("positional field '" ++ field.name ++ "' comes after multi-value positional '" ++ multi_positional_name ++ "'; multi-value positional must be the last positional field");
+            }
+            if (kind == .multi and fc.positional) {
+                if (seen_multi_positional) {
+                    @compileError("multiple multi-value positional fields found: '" ++ multi_positional_name ++ "' and '" ++ field.name ++ "'; only one multi-value positional is allowed");
+                }
+                seen_multi_positional = true;
+                multi_positional_name = field.name;
+            }
+        }
+    }
 }
 
 fn convertValue(comptime T: type, raw: []const u8) ParseError!T {
@@ -943,6 +962,25 @@ test "parser: tagged union subcommand still works after strictening" {
     // Untagged union should NOT be classified as subcommand.
     const BadUnion = union { a: i32, b: f64 };
     try std.testing.expectEqual(ArgKind.option, comptime argKind(BadUnion, .{}));
+}
+
+test "parser: multi positional as last field" {
+    const T = struct {
+        target: []const u8,
+        files: []const []const u8 = &.{},
+    };
+    var result = try parseArgs(T, std.testing.allocator, &.{ "output", "a.zig", "b.zig" }, .{
+        .target = .{ .positional = true },
+        .files = .{ .positional = true },
+    });
+    defer deinitResult(T, &result, std.testing.allocator, .{
+        .target = .{ .positional = true },
+        .files = .{ .positional = true },
+    });
+    try std.testing.expectEqualStrings("output", result.target);
+    try std.testing.expectEqual(@as(usize, 2), result.files.len);
+    try std.testing.expectEqualStrings("a.zig", result.files[0]);
+    try std.testing.expectEqualStrings("b.zig", result.files[1]);
 }
 
 test "parser: no leak on OOM during multi field finalization" {

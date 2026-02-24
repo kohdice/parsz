@@ -29,6 +29,8 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/unknown_subcmd_variant.zig", "unknown subcommand config key 'runn' does not match any variant in unknown_subcmd_variant.Command" },
         .{ "test/comptime/untagged_union.zig", "untagged union; union fields must be tagged (union(enum))" },
         .{ "test/comptime/optional_untagged_union.zig", "untagged union; union fields must be tagged (union(enum))" },
+        .{ "test/comptime/positional_after_multi.zig", "multi-value positional must be the last positional field" },
+        .{ "test/comptime/duplicate_multi_positional.zig", "only one multi-value positional is allowed" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
