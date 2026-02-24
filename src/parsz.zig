@@ -1087,6 +1087,88 @@ test "parse: subcommand parsed then extra positional" {
     try std.testing.expectError(error.TooManyPositionals, result);
 }
 
+test "parse: deinit default subcommand with non-empty multi field" {
+    const Install = struct {
+        packages: []const []const u8 = &.{"default-pkg"},
+    };
+    const Command = union(enum) {
+        install: Install,
+    };
+    const Cli = struct {
+        verbose: bool = false,
+        command: ?Command = .{ .install = .{} },
+    };
+    const config = .{
+        .command = .{
+            .install = .{
+                .packages = .{ .positional = true },
+            },
+        },
+    };
+
+    // No subcommand in argv → default value with static slice is kept.
+    // deinit must not crash on the non-heap "default-pkg" slice.
+    var result = try parse(Cli, std.testing.allocator, &.{}, config);
+    defer deinit(Cli, &result, std.testing.allocator, config);
+
+    // Default value should be preserved.
+    try std.testing.expect(result.command != null);
+    switch (result.command.?) {
+        .install => |inst| {
+            try std.testing.expectEqual(@as(usize, 1), inst.packages.len);
+            try std.testing.expectEqualStrings("default-pkg", inst.packages[0]);
+        },
+    }
+}
+
+test "parse: deinit nested default subcommand with non-empty multi field" {
+    const Inner = struct {
+        tags: []const []const u8 = &.{ "alpha", "beta" },
+    };
+    const InnerCommand = union(enum) {
+        deploy: Inner,
+    };
+    const Outer = struct {
+        command: ?InnerCommand = .{ .deploy = .{} },
+    };
+    const OuterCommand = union(enum) {
+        service: Outer,
+    };
+    const Cli = struct {
+        command: ?OuterCommand = .{ .service = .{} },
+    };
+    const config = .{
+        .command = .{
+            .service = .{
+                .command = .{
+                    .deploy = .{
+                        .tags = .{ .positional = true },
+                    },
+                },
+            },
+        },
+    };
+
+    // No subcommand parsed → nested defaults with static slices must be
+    // heap-normalized so deinit does not perform an invalid free.
+    var result = try parse(Cli, std.testing.allocator, &.{}, config);
+    defer deinit(Cli, &result, std.testing.allocator, config);
+
+    try std.testing.expect(result.command != null);
+    switch (result.command.?) {
+        .service => |svc| {
+            try std.testing.expect(svc.command != null);
+            switch (svc.command.?) {
+                .deploy => |d| {
+                    try std.testing.expectEqual(@as(usize, 2), d.tags.len);
+                    try std.testing.expectEqualStrings("alpha", d.tags[0]);
+                    try std.testing.expectEqualStrings("beta", d.tags[1]);
+                },
+            }
+        },
+    }
+}
+
 test {
     _ = @import("parser.zig");
     _ = @import("tokenizer.zig");
