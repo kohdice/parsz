@@ -213,8 +213,15 @@ fn parseWithSubcommand(
                     }
                 }
                 if (!found_sub) {
-                    if (!try parser.handlePositional(T, config, &result, &field_set, &lists, &positional_index, val, allocator))
+                    if (!try parser.handlePositional(T, config, &result, &field_set, &lists, &positional_index, val, allocator)) {
+                        // Classify the error based on context:
+                        // - If subcommand variants exist, no subcommand has been parsed yet,
+                        //   and we are not after "--", this token is likely a misspelled
+                        //   subcommand name → UnknownSubcommand.
+                        // - Otherwise, all positional slots are filled and this is simply
+                        //   an extra positional argument → TooManyPositionals.
                         return if (sub_fields.len > 0 and !subcmd_parsed and !tok.options_ended) error.UnknownSubcommand else error.TooManyPositionals;
+                    }
                 }
             },
             .end_of_options => {},
