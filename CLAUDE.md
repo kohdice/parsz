@@ -8,7 +8,8 @@ parsz is a command-line argument parser library using only the Zig standard libr
 
 - Zig version: 0.15.2 (`minimum_zig_version` in build.zig.zon)
 - No external dependencies — Zig standard library only
-- POSIX Utility Syntax Guidelines compliance: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
+- GNU-style argument parsing by default (supports option/operand permutation and `--` end-of-options).
+- Not strict POSIX-only parsing. Reference: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
 
 ## Build Commands
 
