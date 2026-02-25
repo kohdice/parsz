@@ -22,6 +22,11 @@ const unwrapOptional = parser.unwrapOptional;
 ///   - `enum`          → enum value parsing
 ///   - `union(enum)`   → subcommand
 ///
+/// Subcommand precedence: when a bare positional token matches a
+/// subcommand variant name, it is consumed as a subcommand.  Use the
+/// `--` end-of-options separator to pass a colliding value as a
+/// positional argument instead.
+///
 /// config is an anonymous struct specifying per-field settings (short, long, positional, etc.).
 /// argv should be the slice from std.process.argsAlloc()[1..].
 ///
@@ -104,6 +109,7 @@ fn parseWithSubcommand(
 
     var result: T = undefined;
     var field_set = std.EnumSet(FieldEnum).initEmpty();
+    var user_set = std.EnumSet(FieldEnum).initEmpty();
 
     inline for (fields) |field| {
         if (field.default_value_ptr) |ptr| {
@@ -184,14 +190,17 @@ fn parseWithSubcommand(
     while (tok.next()) |token| {
         switch (token) {
             .long => |long| {
-                if (!try parser.handleLong(T, config, &result, &field_set, &tok, &lists, long, allocator))
+                if (!try parser.handleLong(T, config, &result, &field_set, &user_set, &tok, &lists, long, allocator))
                     return error.UnknownFlag;
             },
             .short => |ch| {
-                if (!try parser.handleShort(T, config, &result, &field_set, &tok, &lists, ch, allocator))
+                if (!try parser.handleShort(T, config, &result, &field_set, &user_set, &tok, &lists, ch, allocator))
                     return error.UnknownFlag;
             },
             .positional => |val| {
+                // Subcommand matching takes precedence over positional
+                // consumption (consistent with git/docker conventions).
+                // Users can bypass this with the "--" separator.
                 const slice: []const u8 = val;
                 var found_sub = false;
                 if (!tok.options_ended) {
@@ -1167,6 +1176,99 @@ test "parse: deinit nested default subcommand with non-empty multi field" {
             }
         },
     }
+}
+
+test "parse: subcommand name takes precedence over positional" {
+    const Command = union(enum) {
+        run: struct {},
+    };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "run" matches the subcommand variant name, so it is consumed as a
+    // subcommand rather than filling the positional "input" field.
+    const result = parse(Cli, std.testing.allocator, &.{"run"}, config);
+    try std.testing.expectError(error.MissingRequired, result);
+}
+
+test "parse: subcommand name takes precedence, dash-dash escapes to positional" {
+    const Command = union(enum) {
+        run: struct {},
+    };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "--" ends option/subcommand matching, so "run" is treated as a
+    // positional value.
+    const result = try parse(Cli, std.testing.allocator, &.{ "--", "run" }, config);
+    try std.testing.expectEqualStrings("run", result.input);
+    try std.testing.expect(result.command == null);
+}
+
+test "parse: subcommand name takes precedence, positional filled before subcommand" {
+    const Command = union(enum) {
+        run: struct {},
+    };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "file.txt" fills the positional, then "run" matches the subcommand.
+    const result = try parse(Cli, std.testing.allocator, &.{ "file.txt", "run" }, config);
+    try std.testing.expectEqualStrings("file.txt", result.input);
+    try std.testing.expect(result.command != null);
+}
+
+test "parse: subcommand name takes precedence, kebab-case collision" {
+    const Command = union(enum) {
+        dry_run: struct {},
+    };
+    const Cli = struct {
+        input: []const u8,
+        command: ?Command = null,
+    };
+    const config = .{
+        .input = .{ .positional = true },
+        .command = .{},
+    };
+
+    // "dry-run" matches the kebab-case variant name "dry_run" → subcommand.
+    const result = parse(Cli, std.testing.allocator, &.{"dry-run"}, config);
+    try std.testing.expectError(error.MissingRequired, result);
+}
+
+test "parse: bool flag default true with subcommand succeeds" {
+    const Command = union(enum) {
+        run: struct {},
+    };
+    const Cli = struct {
+        flag: bool = true,
+        command: ?Command = null,
+    };
+    const config = .{
+        .command = .{},
+    };
+
+    const result = try parse(Cli, std.testing.allocator, &.{ "--flag", "run" }, config);
+    try std.testing.expect(result.flag == true);
+    try std.testing.expect(result.command != null);
 }
 
 test {
