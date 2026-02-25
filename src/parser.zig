@@ -386,6 +386,7 @@ pub fn parseArgs(
 
     var result: T = undefined;
     var field_set = std.EnumSet(FieldEnum).initEmpty();
+    var user_set = std.EnumSet(FieldEnum).initEmpty();
     var positional_index: usize = 0;
 
     inline for (fields) |field| {
@@ -411,11 +412,11 @@ pub fn parseArgs(
     while (tokenizer.next()) |token| {
         switch (token) {
             .long => |long| {
-                if (!try handleLong(T, config, &result, &field_set, &tokenizer, &lists, long, allocator))
+                if (!try handleLong(T, config, &result, &field_set, &user_set, &tokenizer, &lists, long, allocator))
                     return error.UnknownFlag;
             },
             .short => |ch| {
-                if (!try handleShort(T, config, &result, &field_set, &tokenizer, &lists, ch, allocator))
+                if (!try handleShort(T, config, &result, &field_set, &user_set, &tokenizer, &lists, ch, allocator))
                     return error.UnknownFlag;
             },
             .positional => |val| {
@@ -520,6 +521,7 @@ pub fn handleLong(
     comptime config: anytype,
     result: *T,
     field_set: anytype,
+    user_set: anytype,
     tokenizer: *Tokenizer,
     lists: anytype,
     long: Token.Long,
@@ -546,11 +548,11 @@ pub fn handleLong(
                         field_set.insert(@field(FieldEnum, field.name));
                     }
                 } else {
-                    if (field_set.contains(@field(FieldEnum, field.name)) and
-                        @field(result, field.name) == true)
+                    if (user_set.contains(@field(FieldEnum, field.name)))
                         return error.DuplicateArg;
                     @field(result, field.name) = true;
                     field_set.insert(@field(FieldEnum, field.name));
+                    user_set.insert(@field(FieldEnum, field.name));
                 }
                 return true;
             }
@@ -566,7 +568,7 @@ pub fn handleLong(
             }
 
             // option: duplicate check for required (no default) fields
-            if (field_set.contains(@field(FieldEnum, field.name)) and
+            if (user_set.contains(@field(FieldEnum, field.name)) and
                 field.default_value_ptr == null and
                 @typeInfo(field.type) != .optional)
                 return error.DuplicateArg;
@@ -575,6 +577,7 @@ pub fn handleLong(
             const converted = try convertValue(ValueType, raw_value);
             @field(result, field.name) = converted;
             field_set.insert(@field(FieldEnum, field.name));
+            user_set.insert(@field(FieldEnum, field.name));
             return true;
         }
     }
@@ -586,6 +589,7 @@ pub fn handleShort(
     comptime config: anytype,
     result: *T,
     field_set: anytype,
+    user_set: anytype,
     tokenizer: *Tokenizer,
     lists: anytype,
     ch: u8,
@@ -611,11 +615,11 @@ pub fn handleShort(
                             field_set.insert(@field(FieldEnum, field.name));
                         }
                     } else {
-                        if (field_set.contains(@field(FieldEnum, field.name)) and
-                            @field(result, field.name) == true)
+                        if (user_set.contains(@field(FieldEnum, field.name)))
                             return error.DuplicateArg;
                         @field(result, field.name) = true;
                         field_set.insert(@field(FieldEnum, field.name));
+                        user_set.insert(@field(FieldEnum, field.name));
                     }
                     return true;
                 }
@@ -634,7 +638,7 @@ pub fn handleShort(
                     return true;
                 }
 
-                if (field_set.contains(@field(FieldEnum, field.name)) and
+                if (user_set.contains(@field(FieldEnum, field.name)) and
                     field.default_value_ptr == null and
                     @typeInfo(field.type) != .optional)
                     return error.DuplicateArg;
@@ -643,6 +647,7 @@ pub fn handleShort(
                 const converted = try convertValue(ValueType, raw_value);
                 @field(result, field.name) = converted;
                 field_set.insert(@field(FieldEnum, field.name));
+                user_set.insert(@field(FieldEnum, field.name));
                 return true;
             }
         }
@@ -1065,4 +1070,44 @@ test "parser: no leak on OOM during multi field finalization" {
             // Expected OOM — std.testing.allocator detects leaks automatically.
         }
     }
+}
+
+test "parser: bool flag default true first use succeeds" {
+    const T = struct { flag: bool = true };
+    const result = try parseArgs(T, std.testing.allocator, &.{"--flag"}, .{});
+    try std.testing.expect(result.flag == true);
+}
+
+test "parser: bool flag default true duplicate returns DuplicateArg" {
+    const T = struct { flag: bool = true };
+    const result = parseArgs(T, std.testing.allocator, &.{ "--flag", "--flag" }, .{});
+    try std.testing.expectError(error.DuplicateArg, result);
+}
+
+test "parser: bool flag default true short first use succeeds" {
+    const T = struct { flag: bool = true };
+    const result = try parseArgs(T, std.testing.allocator, &.{"-f"}, .{
+        .flag = .{ .short = 'f' },
+    });
+    try std.testing.expect(result.flag == true);
+}
+
+test "parser: bool flag default false first use succeeds" {
+    const T = struct { verbose: bool = false };
+    const result = try parseArgs(T, std.testing.allocator, &.{"--verbose"}, .{});
+    try std.testing.expect(result.verbose == true);
+}
+
+test "parser: bool flag default false duplicate returns DuplicateArg" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{ "--verbose", "--verbose" }, .{});
+    try std.testing.expectError(error.DuplicateArg, result);
+}
+
+test "parser: bool flag long short mixed duplicate returns DuplicateArg" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{ "--verbose", "-v" }, .{
+        .verbose = .{ .short = 'v' },
+    });
+    try std.testing.expectError(error.DuplicateArg, result);
 }
