@@ -1,5 +1,6 @@
 const std = @import("std");
 const parser = @import("parser.zig");
+const spec_command = @import("spec/command.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 const errors_mod = @import("errors.zig");
 
@@ -39,20 +40,9 @@ pub fn parse(
     comptime config: anytype,
 ) (ParseError || error{OutOfMemory})!T {
     @setEvalBranchQuota(10_000);
-
-    const fields = @typeInfo(T).@"struct".fields;
-    comptime var has_subcommand = false;
-    comptime var subcmd_field_name: ?[]const u8 = null;
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        if (comptime argKind(field.type, fc) == .subcommand) {
-            has_subcommand = true;
-            subcmd_field_name = field.name;
-        }
-    }
-
-    if (comptime has_subcommand) {
-        return parseWithSubcommand(T, allocator, argv, config, subcmd_field_name.?);
+    const cmd_spec = comptime spec_command.buildSpec(T, config);
+    if (comptime cmd_spec.subcommand_field != null) {
+        return parseWithSubcommand(T, allocator, argv, config, cmd_spec.subcommand_field.?);
     } else {
         return parser.parseArgs(T, allocator, argv, config);
     }
@@ -102,7 +92,9 @@ fn parseWithSubcommand(
     comptime subcmd_field_name: []const u8,
 ) (ParseError || error{OutOfMemory})!T {
     @setEvalBranchQuota(10_000);
-    comptime parser.validateConfig(T, config);
+    const validator = @import("validator.zig");
+    comptime validator.validate(T, config);
+    comptime validator.validateSubcommandConfig(T, config, subcmd_field_name);
 
     const fields = @typeInfo(T).@"struct".fields;
     const FieldEnum = std.meta.FieldEnum(T);
@@ -130,39 +122,6 @@ fn parseWithSubcommand(
     };
     const SubUnion = comptime unwrapOptional(subcmd_field.type);
     const sub_fields = @typeInfo(SubUnion).@"union".fields;
-
-    // Validate that subcommand config keys match union variant names.
-    comptime {
-        const Config = @TypeOf(config);
-        const config_info = @typeInfo(Config);
-        if (config_info == .@"struct" and Config != @TypeOf(.{})) {
-            for (config_info.@"struct".fields) |cf| {
-                if (std.mem.eql(u8, cf.name, subcmd_field_name)) {
-                    const subcmd_config = @field(config, subcmd_field_name);
-                    const SubConfig = @TypeOf(subcmd_config);
-                    const sub_config_info = @typeInfo(SubConfig);
-                    if (sub_config_info == .@"struct" and SubConfig != @TypeOf(.{})) {
-                        for (sub_config_info.@"struct".fields) |vcf| {
-                            var found = false;
-                            for (sub_fields) |sf| {
-                                if (std.mem.eql(u8, vcf.name, sf.name)) {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) {
-                                @compileError(
-                                    "unknown subcommand config key '" ++ vcf.name ++
-                                        "' does not match any variant in " ++ @typeName(SubUnion),
-                                );
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
 
     // Track whether subcommand was actually parsed (not just default-initialized).
     // Default values (e.g. `?Command = null`) are also in field_set, so we
