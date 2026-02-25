@@ -22,10 +22,8 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 3G
-      - name: Check Zig formatting
-        run: nix develop -c zig fmt --check .
-      - name: Check Nix formatting
-        run: nix fmt -- --check .
+      - name: Check formatting
+        run: nix fmt -- --fail-on-change
   build-and-test:
     name: Build & Test (${{ matrix.os }})
     needs: fmt
