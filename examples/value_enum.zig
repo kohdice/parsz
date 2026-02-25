@@ -22,7 +22,7 @@ pub fn main() !void {
 
     const cli = parsz.parse(Cli, allocator, argv[1..], .{
         .verbose = .{ .short = 'v' },
-    }) catch |err| {
+    }, null) catch |err| {
         std.debug.print("error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };

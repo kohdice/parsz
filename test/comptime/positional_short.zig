@@ -10,7 +10,7 @@ const T = struct {
 comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .input = .{ .positional = true, .short = 'i' },
-    });
+    }, null);
 }
 
 test "positional with short should fail at comptime" {

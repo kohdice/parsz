@@ -13,7 +13,7 @@ comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .files = .{ .positional = true },
         .target = .{ .positional = true },
-    });
+    }, null);
 }
 
 test "positional after multi-value positional should fail at comptime" {

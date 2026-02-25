@@ -15,7 +15,7 @@ comptime {
         .command = .{
             .runn = .{},
         },
-    });
+    }, null);
 }
 
 test "unknown subcommand config key should fail at comptime" {

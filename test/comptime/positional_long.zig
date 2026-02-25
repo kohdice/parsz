@@ -10,7 +10,7 @@ const T = struct {
 comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .input = .{ .positional = true, .long = "input-file" },
-    });
+    }, null);
 }
 
 test "positional with long should fail at comptime" {

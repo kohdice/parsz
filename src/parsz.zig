@@ -1,16 +1,12 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const spec_command = @import("spec/command.zig");
-const tokenizer_mod = @import("tokenizer.zig");
 const errors_mod = @import("errors.zig");
 
-const Tokenizer = tokenizer_mod.Tokenizer;
 pub const ParseError = errors_mod.ParseError;
+pub const Diagnostic = errors_mod.Diagnostic;
+pub const FlagRef = errors_mod.FlagRef;
 pub const FieldConfig = parser.FieldConfig;
-const argKind = parser.argKind;
-const getFieldConfig = parser.getFieldConfig;
-const snakeToKebab = parser.snakeToKebab;
-const unwrapOptional = parser.unwrapOptional;
 
 /// Parse command-line arguments and return a value of type T.
 ///
@@ -33,19 +29,19 @@ const unwrapOptional = parser.unwrapOptional;
 ///
 /// Multi fields (`[]const T`) perform heap allocation; call `deinit` after use
 /// or manually free the returned slices.
+///
+/// Pass a `*Diagnostic` to receive detailed context on parse errors, or `null`
+/// to skip diagnostic reporting.
 pub fn parse(
     comptime T: type,
     allocator: std.mem.Allocator,
     argv: []const [:0]const u8,
     comptime config: anytype,
+    diagnostic: ?*Diagnostic,
 ) (ParseError || error{OutOfMemory})!T {
     @setEvalBranchQuota(10_000);
     const cmd_spec = comptime spec_command.buildSpec(T, config);
-    if (comptime cmd_spec.subcommand_field != null) {
-        return parseWithSubcommand(T, allocator, argv, config, cmd_spec.subcommand_field.?);
-    } else {
-        return parser.parseArgs(T, allocator, argv, config);
-    }
+    return parser.parseCore(T, allocator, argv, config, diagnostic, cmd_spec.subcommand_field);
 }
 
 /// Free heap memory allocated for multi fields (`[]const T`).
@@ -56,410 +52,18 @@ pub fn deinit(
     comptime config: anytype,
 ) void {
     @setEvalBranchQuota(10_000);
-
-    const fields = @typeInfo(T).@"struct".fields;
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        const kind = comptime argKind(field.type, fc);
-        if (kind == .multi) {
-            if (comptime @typeInfo(field.type) == .optional) {
-                if (@field(result, field.name)) |s| {
-                    allocator.free(s);
-                }
-                @field(result, field.name) = null;
-            } else {
-                allocator.free(@field(result, field.name));
-                @field(result, field.name) = &.{};
-            }
-        } else if (kind == .subcommand) {
-            const SubType = comptime unwrapOptional(field.type);
-            if (@typeInfo(field.type) == .optional) {
-                if (@field(result, field.name)) |*sub| {
-                    deinitSubcommand(SubType, sub, allocator, config, field.name);
-                }
-            } else {
-                deinitSubcommand(SubType, &@field(result, field.name), allocator, config, field.name);
-            }
-        }
-    }
-}
-
-fn parseWithSubcommand(
-    comptime T: type,
-    allocator: std.mem.Allocator,
-    argv: []const [:0]const u8,
-    comptime config: anytype,
-    comptime subcmd_field_name: []const u8,
-) (ParseError || error{OutOfMemory})!T {
-    @setEvalBranchQuota(10_000);
-    const validator = @import("validator.zig");
-    comptime validator.validate(T, config);
-    comptime validator.validateSubcommandConfig(T, config, subcmd_field_name);
-
-    const fields = @typeInfo(T).@"struct".fields;
-    const FieldEnum = std.meta.FieldEnum(T);
-
-    var result: T = undefined;
-    var field_set = std.EnumSet(FieldEnum).initEmpty();
-    var user_set = std.EnumSet(FieldEnum).initEmpty();
-
-    inline for (fields) |field| {
-        if (field.default_value_ptr) |ptr| {
-            const default = @as(*const field.type, @ptrCast(@alignCast(ptr))).*;
-            @field(result, field.name) = default;
-            field_set.insert(@field(FieldEnum, field.name));
-        } else if (@typeInfo(field.type) == .optional) {
-            @field(result, field.name) = null;
-            field_set.insert(@field(FieldEnum, field.name));
-        }
-    }
-
-    const subcmd_field = comptime blk: {
-        for (fields) |f| {
-            if (std.mem.eql(u8, f.name, subcmd_field_name)) break :blk f;
-        }
-        unreachable;
-    };
-    const SubUnion = comptime unwrapOptional(subcmd_field.type);
-    const sub_fields = @typeInfo(SubUnion).@"union".fields;
-
-    // Track whether subcommand was actually parsed (not just default-initialized).
-    // Default values (e.g. `?Command = null`) are also in field_set, so we
-    // cannot rely on field_set alone to decide whether to deinit on error.
-    var subcmd_parsed = false;
-
-    errdefer {
-        if (subcmd_parsed) {
-            if (@typeInfo(subcmd_field.type) == .optional) {
-                if (@field(result, subcmd_field_name)) |*sub| {
-                    deinitSubcommand(SubUnion, sub, allocator, config, subcmd_field_name);
-                }
-            } else {
-                deinitSubcommand(SubUnion, &@field(result, subcmd_field_name), allocator, config, subcmd_field_name);
-            }
-        }
-    }
-
-    var tok = Tokenizer{ .args = argv };
-    var positional_index: usize = 0;
-
-    var lists = parser.initMultiLists(T, config);
-    defer parser.deinitMultiLists(T, config, &lists, allocator);
-
-    while (tok.next()) |token| {
-        switch (token) {
-            .long => |long| {
-                if (!try parser.handleLong(T, config, &result, &field_set, &user_set, &tok, &lists, long, allocator))
-                    return error.UnknownFlag;
-            },
-            .short => |ch| {
-                if (!try parser.handleShort(T, config, &result, &field_set, &user_set, &tok, &lists, ch, allocator))
-                    return error.UnknownFlag;
-            },
-            .positional => |val| {
-                // Subcommand matching takes precedence over positional
-                // consumption (consistent with git/docker conventions).
-                // Users can bypass this with the "--" separator.
-                const slice: []const u8 = val;
-                var found_sub = false;
-                if (!tok.options_ended) {
-                    inline for (sub_fields) |sf| {
-                        if (std.mem.eql(u8, slice, comptime snakeToKebab(sf.name))) {
-                            const remaining = tok.args[tok.index..];
-                            const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
-                            const sub_result = try parse(sf.type, allocator, remaining, sub_config);
-                            @field(result, subcmd_field_name) =
-                                if (@typeInfo(subcmd_field.type) == .optional)
-                                    @unionInit(SubUnion, sf.name, sub_result)
-                                else
-                                    @unionInit(SubUnion, sf.name, sub_result);
-                            field_set.insert(@field(FieldEnum, subcmd_field_name));
-                            subcmd_parsed = true;
-                            tok.index = tok.args.len;
-                            found_sub = true;
-                        }
-                    }
-                }
-                if (!found_sub) {
-                    if (!try parser.handlePositional(T, config, &result, &field_set, &lists, &positional_index, val, allocator)) {
-                        // Classify the error based on context:
-                        // - If subcommand variants exist, no subcommand has been parsed yet,
-                        //   and we are not after "--", this token is likely a misspelled
-                        //   subcommand name → UnknownSubcommand.
-                        // - Otherwise, all positional slots are filled and this is simply
-                        //   an extra positional argument → TooManyPositionals.
-                        return if (sub_fields.len > 0 and !subcmd_parsed and !tok.options_ended) error.UnknownSubcommand else error.TooManyPositionals;
-                    }
-                }
-            },
-            .end_of_options => {},
-        }
-    }
-
-    // Mark multi fields as set before required-field check to prevent
-    // leaking toOwnedSlice allocations when a required field is missing.
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        if (comptime argKind(field.type, fc) == .multi) {
-            field_set.insert(@field(FieldEnum, field.name));
-        }
-    }
-
-    // Required-field check: uses else instead of continue because inline for
-    // does not support continue in this context.
-    inline for (fields) |field| {
-        if (!field_set.contains(@field(FieldEnum, field.name))) {
-            const fc = comptime getFieldConfig(config, field.name);
-            const kind = comptime argKind(field.type, fc);
-            if (kind == .subcommand and @typeInfo(field.type) == .optional) {
-                @field(result, field.name) = null;
-            } else if (kind == .subcommand) {
-                return error.MissingSubcommand;
-            } else {
-                return error.MissingRequired;
-            }
-        }
-    }
-
-    // Track which multi fields have been heap-allocated during finalization.
-    // errdefer inside inline for is block-scoped per iteration and does not
-    // accumulate, so we use a single errdefer outside the loop with an EnumSet.
-    var finalized_multi = std.EnumSet(FieldEnum).initEmpty();
-    errdefer {
-        inline for (fields) |field| {
-            const fc = comptime getFieldConfig(config, field.name);
-            if (comptime argKind(field.type, fc) == .multi) {
-                if (finalized_multi.contains(@field(FieldEnum, field.name))) {
-                    if (comptime @typeInfo(field.type) == .optional) {
-                        if (@field(result, field.name)) |s| allocator.free(s);
-                    } else {
-                        allocator.free(@field(result, field.name));
-                    }
-                }
-            }
-        }
-    }
-
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        if (comptime argKind(field.type, fc) == .multi) {
-            if (@field(lists, field.name).items.len == 0 and field.default_value_ptr != null) {
-                // Preserve default. Copy non-empty defaults to heap for uniform deinit.
-                const Child = comptime parser.sliceChild(field.type);
-                if (comptime @typeInfo(field.type) == .optional) {
-                    if (@field(result, field.name)) |default_slice| {
-                        if (default_slice.len > 0) {
-                            @field(result, field.name) = try allocator.dupe(Child, default_slice);
-                            finalized_multi.insert(@field(FieldEnum, field.name));
-                        }
-                        // len == 0: keep &.{}, free is no-op
-                    }
-                    // null: keep null, deinit skips null
-                } else {
-                    const default_slice = @field(result, field.name);
-                    if (default_slice.len > 0) {
-                        @field(result, field.name) = try allocator.dupe(Child, default_slice);
-                        finalized_multi.insert(@field(FieldEnum, field.name));
-                    }
-                    // len == 0: keep &.{}, free is no-op
-                }
-            } else {
-                @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
-                finalized_multi.insert(@field(FieldEnum, field.name));
-            }
-        }
-    }
-
-    // Normalize multi-field defaults inside unparsed subcommand payloads.
-    // When a subcommand is NOT parsed from argv, its payload retains default
-    // values that may contain static/comptime slices. These must be heap-
-    // duplicated so that `deinit` can safely call `allocator.free()`.
-    if (!subcmd_parsed) {
-        if (comptime @typeInfo(subcmd_field.type) == .optional) {
-            if (@field(result, subcmd_field_name)) |*sub| {
-                try normalizeSubcommandMultiDefaults(SubUnion, sub, allocator, config, subcmd_field_name);
-                @field(result, subcmd_field_name) = sub.*;
-            }
-        } else if (comptime subcmd_field.default_value_ptr != null) {
-            try normalizeSubcommandMultiDefaults(SubUnion, &@field(result, subcmd_field_name), allocator, config, subcmd_field_name);
-        }
-    }
-
-    return result;
-}
-
-/// Retrieve the config for a subcommand variant at comptime.
-/// The return type varies per variant, so callers infer it via anytype.
-fn getSubVariantConfig(comptime config: anytype, comptime subcmd_field_name: []const u8, comptime variant_name: []const u8) SubVariantConfigType(config, subcmd_field_name, variant_name) {
-    const Config = @TypeOf(config);
-    const config_info = @typeInfo(Config);
-    if (config_info != .@"struct") return .{};
-
-    inline for (config_info.@"struct".fields) |cf| {
-        if (comptime std.mem.eql(u8, cf.name, subcmd_field_name)) {
-            const subcmd_config = @field(config, subcmd_field_name);
-            const SubConfig = @TypeOf(subcmd_config);
-            const sub_info = @typeInfo(SubConfig);
-            if (sub_info != .@"struct") return .{};
-
-            inline for (sub_info.@"struct".fields) |vf| {
-                if (comptime std.mem.eql(u8, vf.name, variant_name)) {
-                    return @field(subcmd_config, variant_name);
-                }
-            }
-            return .{};
-        }
-    }
-    return .{};
-}
-
-fn SubVariantConfigType(comptime config: anytype, comptime subcmd_field_name: []const u8, comptime variant_name: []const u8) type {
-    const Config = @TypeOf(config);
-    const config_info = @typeInfo(Config);
-    if (config_info != .@"struct") return @TypeOf(.{});
-
-    for (config_info.@"struct".fields) |cf| {
-        if (std.mem.eql(u8, cf.name, subcmd_field_name)) {
-            const subcmd_config = @field(config, subcmd_field_name);
-            const SubConfig = @TypeOf(subcmd_config);
-            const sub_info = @typeInfo(SubConfig);
-            if (sub_info != .@"struct") return @TypeOf(.{});
-
-            for (sub_info.@"struct".fields) |vf| {
-                if (std.mem.eql(u8, vf.name, variant_name)) {
-                    return @TypeOf(@field(subcmd_config, variant_name));
-                }
-            }
-            return @TypeOf(.{});
-        }
-    }
-    return @TypeOf(.{});
-}
-
-fn deinitSubcommand(
-    comptime SubUnion: type,
-    sub: *SubUnion,
-    allocator: std.mem.Allocator,
-    comptime config: anytype,
-    comptime subcmd_field_name: []const u8,
-) void {
-    const sub_ufields = @typeInfo(SubUnion).@"union".fields;
-    inline for (sub_ufields) |sf| {
-        if (sub.* == @field(std.meta.FieldEnum(SubUnion), sf.name)) {
-            const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
-            var payload = @field(sub, sf.name);
-            deinit(sf.type, &payload, allocator, sub_config);
-            sub.* = @unionInit(SubUnion, sf.name, payload);
-        }
-    }
-}
-
-/// Copy static/comptime multi-field slices to heap so that `deinit` can
-/// uniformly call `allocator.free()` on every multi field.  This mirrors
-/// the finalization performed by `parseArgs` but operates on an already-
-/// initialized struct whose multi fields may still point to read-only
-/// comptime memory (e.g. a default value such as `&.{"foo"}`).
-fn normalizeMultiDefaults(
-    comptime T: type,
-    result: *T,
-    allocator: std.mem.Allocator,
-    comptime config: anytype,
-) error{OutOfMemory}!void {
-    const fields = @typeInfo(T).@"struct".fields;
-    const FieldEnum = std.meta.FieldEnum(T);
-
-    // Track which fields have been heap-duped so we can free them on OOM.
-    var normalized = std.EnumSet(FieldEnum).initEmpty();
-    errdefer {
-        inline for (fields) |field| {
-            const fc = comptime getFieldConfig(config, field.name);
-            const kind = comptime argKind(field.type, fc);
-            if (kind == .multi) {
-                if (normalized.contains(@field(FieldEnum, field.name))) {
-                    if (comptime @typeInfo(field.type) == .optional) {
-                        if (@field(result, field.name)) |s| allocator.free(s);
-                    } else {
-                        allocator.free(@field(result, field.name));
-                    }
-                }
-            } else if (kind == .subcommand) {
-                if (normalized.contains(@field(FieldEnum, field.name))) {
-                    const SubType = comptime unwrapOptional(field.type);
-                    if (@typeInfo(field.type) == .optional) {
-                        if (@field(result, field.name)) |*sub| {
-                            deinitSubcommand(SubType, sub, allocator, config, field.name);
-                        }
-                    } else {
-                        deinitSubcommand(SubType, &@field(result, field.name), allocator, config, field.name);
-                    }
-                }
-            }
-        }
-    }
-
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        const kind = comptime argKind(field.type, fc);
-        if (kind == .multi) {
-            const Child = comptime parser.sliceChild(field.type);
-            if (comptime @typeInfo(field.type) == .optional) {
-                if (@field(result, field.name)) |slice| {
-                    if (slice.len > 0) {
-                        @field(result, field.name) = try allocator.dupe(Child, slice);
-                        normalized.insert(@field(FieldEnum, field.name));
-                    }
-                }
-            } else {
-                const slice = @field(result, field.name);
-                if (slice.len > 0) {
-                    @field(result, field.name) = try allocator.dupe(Child, slice);
-                    normalized.insert(@field(FieldEnum, field.name));
-                }
-            }
-        } else if (kind == .subcommand) {
-            const SubType = comptime unwrapOptional(field.type);
-            if (@typeInfo(field.type) == .optional) {
-                if (@field(result, field.name)) |*sub| {
-                    try normalizeSubcommandMultiDefaults(SubType, sub, allocator, config, field.name);
-                    normalized.insert(@field(FieldEnum, field.name));
-                }
-            } else {
-                try normalizeSubcommandMultiDefaults(SubType, &@field(result, field.name), allocator, config, field.name);
-                normalized.insert(@field(FieldEnum, field.name));
-            }
-        }
-    }
-}
-
-/// Normalize multi-field defaults inside a subcommand union payload.
-/// Mirrors `deinitSubcommand` but heap-duplicates instead of freeing.
-fn normalizeSubcommandMultiDefaults(
-    comptime SubUnion: type,
-    sub: *SubUnion,
-    allocator: std.mem.Allocator,
-    comptime config: anytype,
-    comptime subcmd_field_name: []const u8,
-) error{OutOfMemory}!void {
-    const sub_ufields = @typeInfo(SubUnion).@"union".fields;
-    inline for (sub_ufields) |sf| {
-        if (sub.* == @field(std.meta.FieldEnum(SubUnion), sf.name)) {
-            const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
-            var payload = @field(sub, sf.name);
-            try normalizeMultiDefaults(sf.type, &payload, allocator, sub_config);
-            sub.* = @unionInit(SubUnion, sf.name, payload);
-        }
-    }
+    parser.deinitFields(T, result, allocator, config);
 }
 
 test "parse: basic flag" {
     const Cli = struct { verbose: bool = false };
-    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{});
+    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{}, null);
     try std.testing.expect(result.verbose);
 }
 
 test "parse: string option with default" {
     const Cli = struct { output: []const u8 = "out.txt" };
-    const result = try parse(Cli, std.testing.allocator, &.{ "--output", "file.txt" }, .{});
+    const result = try parse(Cli, std.testing.allocator, &.{ "--output", "file.txt" }, .{}, null);
     try std.testing.expectEqualStrings("file.txt", result.output);
 }
 
@@ -467,7 +71,7 @@ test "parse: required positional" {
     const Cli = struct { input: []const u8 };
     const result = try parse(Cli, std.testing.allocator, &.{"hello.txt"}, .{
         .input = .{ .positional = true },
-    });
+    }, null);
     try std.testing.expectEqualStrings("hello.txt", result.input);
 }
 
@@ -493,7 +97,7 @@ test "parse: subcommand" {
                 .remote = .{ .positional = true },
             },
         },
-    });
+    }, null);
 
     try std.testing.expect(result.verbose);
     try std.testing.expect(result.command != null);
@@ -521,7 +125,7 @@ test "parse: subcommand with flags" {
                 .force = .{ .short = 'f' },
             },
         },
-    });
+    }, null);
 
     try std.testing.expect(result.command != null);
     switch (result.command.?) {
@@ -541,20 +145,20 @@ test "parse: optional subcommand null" {
         command: ?Command = null,
     };
 
-    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{});
+    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{}, null);
     try std.testing.expect(result.verbose);
     try std.testing.expect(result.command == null);
 }
 
 test "parse: optional field without explicit default" {
     const Cli = struct { config_path: ?[]const u8 };
-    const result = try parse(Cli, std.testing.allocator, &.{}, .{});
+    const result = try parse(Cli, std.testing.allocator, &.{}, .{}, null);
     try std.testing.expect(result.config_path == null);
 }
 
 test "parse: optional field without explicit default with value" {
     const Cli = struct { config_path: ?[]const u8 };
-    const result = try parse(Cli, std.testing.allocator, &.{ "--config-path", "cfg.toml" }, .{});
+    const result = try parse(Cli, std.testing.allocator, &.{ "--config-path", "cfg.toml" }, .{}, null);
     try std.testing.expectEqualStrings("cfg.toml", result.config_path.?);
 }
 
@@ -567,14 +171,14 @@ test "parse: optional subcommand without explicit default" {
         command: ?Command,
     };
 
-    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{});
+    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{}, null);
     try std.testing.expect(result.verbose);
     try std.testing.expect(result.command == null);
 }
 
 test "parse: deinit with multi field" {
     const Cli = struct { ports: []const u16 = &.{} };
-    var result = try parse(Cli, std.testing.allocator, &.{ "--ports", "80", "--ports", "443" }, .{});
+    var result = try parse(Cli, std.testing.allocator, &.{ "--ports", "80", "--ports", "443" }, .{}, null);
     defer deinit(Cli, &result, std.testing.allocator, .{});
     try std.testing.expectEqual(@as(usize, 2), result.ports.len);
 }
@@ -591,7 +195,7 @@ test "parse: combined short long positional" {
         .verbose = .{ .short = 'v' },
         .output = .{ .short = 'o' },
         .input = .{ .positional = true },
-    });
+    }, null);
 
     try std.testing.expect(result.verbose);
     try std.testing.expectEqualStrings("result.txt", result.output);
@@ -605,7 +209,7 @@ test "parse: enum option" {
         mode: Mode = .balanced,
     };
 
-    const result = try parse(Cli, std.testing.allocator, &.{ "--mode", "fast" }, .{});
+    const result = try parse(Cli, std.testing.allocator, &.{ "--mode", "fast" }, .{}, null);
     try std.testing.expectEqual(Mode.fast, result.mode);
 }
 
@@ -618,13 +222,13 @@ test "parse: no leak when multi field set but required subcommand missing" {
         command: Command,
     };
 
-    const result = parse(Cli, std.testing.allocator, &.{ "--ports", "80" }, .{});
+    const result = parse(Cli, std.testing.allocator, &.{ "--ports", "80" }, .{}, null);
     try std.testing.expectError(error.MissingSubcommand, result);
 }
 
 test "parse: deinit optional multi field" {
     const Cli = struct { ports: ?[]const u16 = null };
-    var result = try parse(Cli, std.testing.allocator, &.{ "--ports", "80", "--ports", "443" }, .{});
+    var result = try parse(Cli, std.testing.allocator, &.{ "--ports", "80", "--ports", "443" }, .{}, null);
     defer deinit(Cli, &result, std.testing.allocator, .{});
     try std.testing.expect(result.ports != null);
     try std.testing.expectEqual(@as(usize, 2), result.ports.?.len);
@@ -643,7 +247,7 @@ test "parse: end of options prevents subcommand matching" {
     };
 
     // "-- run" should treat "run" as positional input, not as subcommand
-    const result = try parse(Cli, std.testing.allocator, &.{ "--", "run" }, config);
+    const result = try parse(Cli, std.testing.allocator, &.{ "--", "run" }, config, null);
     try std.testing.expectEqualStrings("run", result.input);
     try std.testing.expect(result.command == null);
 }
@@ -663,7 +267,7 @@ test "parse: end of options with flags and subcommand name" {
     };
 
     // "--verbose -- push" should treat "push" as positional target
-    const result = try parse(Cli, std.testing.allocator, &.{ "--verbose", "--", "push" }, config);
+    const result = try parse(Cli, std.testing.allocator, &.{ "--verbose", "--", "push" }, config, null);
     try std.testing.expect(result.verbose);
     try std.testing.expectEqualStrings("push", result.target);
     try std.testing.expect(result.command == null);
@@ -681,7 +285,7 @@ test "parse: unresolved subcommand reports UnknownSubcommand" {
     };
 
     // "file.txt extra" — first positional fills input, second is unknown subcommand
-    const result = parse(Cli, std.testing.allocator, &.{ "file.txt", "extra" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "file.txt", "extra" }, config, null);
     try std.testing.expectError(error.UnknownSubcommand, result);
 }
 
@@ -693,7 +297,7 @@ test "parse: unknown subcommand" {
     const config = .{ .command = .{} };
 
     // "bogus" matches no subcommand and no positional field
-    const result = parse(Cli, std.testing.allocator, &.{"bogus"}, config);
+    const result = parse(Cli, std.testing.allocator, &.{"bogus"}, config, null);
     try std.testing.expectError(error.UnknownSubcommand, result);
 }
 
@@ -709,7 +313,7 @@ test "parse: end of options with too many positionals" {
     };
 
     // "-- file.txt extra" — after --, positional overflow should be TooManyPositionals
-    const result = parse(Cli, std.testing.allocator, &.{ "--", "file.txt", "extra" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "--", "file.txt", "extra" }, config, null);
     try std.testing.expectError(error.TooManyPositionals, result);
 }
 
@@ -736,7 +340,7 @@ test "parse: no subcommand heap leak on optional subcmd with missing required fi
     // Subcommand "install" is parsed (with heap-allocated packages slice),
     // but top-level required field "host" is missing → MissingRequired.
     // The errdefer must free the subcommand's multi-field allocation.
-    const result = parse(Cli, std.testing.allocator, &.{ "install", "pkg-a", "pkg-b" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "install", "pkg-a", "pkg-b" }, config, null);
     try std.testing.expectError(error.MissingRequired, result);
 }
 
@@ -761,7 +365,7 @@ test "parse: no subcommand heap leak on non-optional subcmd with missing require
     };
 
     // Same scenario but with non-optional subcommand field.
-    const result = parse(Cli, std.testing.allocator, &.{ "install", "pkg-a" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "install", "pkg-a" }, config, null);
     try std.testing.expectError(error.MissingRequired, result);
 }
 
@@ -783,7 +387,7 @@ test "parse: deinit subcommand double call safety" {
         },
     };
 
-    var result = try parse(Cli, std.testing.allocator, &.{ "install", "pkg-a", "pkg-b" }, config);
+    var result = try parse(Cli, std.testing.allocator, &.{ "install", "pkg-a", "pkg-b" }, config, null);
     // First deinit frees the allocation and resets via @unionInit writeback.
     deinit(Cli, &result, std.testing.allocator, config);
     // Second deinit must be safe (no double free) because payload was reset.
@@ -813,7 +417,7 @@ test "nested subcommand basic" {
         },
     };
 
-    const result = try parse(Cli, std.testing.allocator, &.{ "--verbose", "remote", "add", "origin" }, config);
+    const result = try parse(Cli, std.testing.allocator, &.{ "--verbose", "remote", "add", "origin" }, config, null);
     try std.testing.expect(result.verbose);
     switch (result.command) {
         .remote => |r| switch (r.command) {
@@ -846,7 +450,7 @@ test "nested subcommand with positional" {
         },
     };
 
-    const result = try parse(Cli, std.testing.allocator, &.{ "remote", "add", "origin", "https://example.com" }, config);
+    const result = try parse(Cli, std.testing.allocator, &.{ "remote", "add", "origin", "https://example.com" }, config, null);
     switch (result.command) {
         .remote => |r| switch (r.command) {
             .add => |a| {
@@ -879,7 +483,7 @@ test "nested subcommand deinit with multi" {
         },
     };
 
-    var result = try parse(Cli, std.testing.allocator, &.{ "pkg", "install", "foo", "bar" }, config);
+    var result = try parse(Cli, std.testing.allocator, &.{ "pkg", "install", "foo", "bar" }, config, null);
     defer deinit(Cli, &result, std.testing.allocator, config);
     switch (result.command) {
         .pkg => |p| switch (p.command) {
@@ -908,7 +512,7 @@ test "nested optional subcommand null" {
         },
     };
 
-    const result = try parse(Cli, std.testing.allocator, &.{"remote"}, config);
+    const result = try parse(Cli, std.testing.allocator, &.{"remote"}, config, null);
     switch (result.command) {
         .remote => |r| try std.testing.expect(r.command == null),
     }
@@ -933,7 +537,7 @@ test "nested missing required subcommand" {
         },
     };
 
-    const result = parse(Cli, std.testing.allocator, &.{"remote"}, config);
+    const result = parse(Cli, std.testing.allocator, &.{"remote"}, config, null);
     try std.testing.expectError(error.MissingSubcommand, result);
 }
 
@@ -955,7 +559,7 @@ test "nested unknown subcommand error" {
         },
     };
 
-    const result = parse(Cli, std.testing.allocator, &.{ "remote", "bogus" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "remote", "bogus" }, config, null);
     try std.testing.expectError(error.UnknownSubcommand, result);
 }
 
@@ -979,7 +583,7 @@ test "nested unknown flag error" {
         },
     };
 
-    const result = parse(Cli, std.testing.allocator, &.{ "remote", "add", "--nonexistent" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "remote", "add", "--nonexistent" }, config, null);
     try std.testing.expectError(error.UnknownFlag, result);
 }
 
@@ -1012,13 +616,13 @@ test "nested subcommand no leak on error" {
     // "pkg install foo bar" — subcommand "install" is parsed with heap-allocated
     // packages, but the outer struct's required_field is missing → MissingRequired.
     // The errdefer chain must free the nested multi-field allocation.
-    const result = parse(Cli, std.testing.allocator, &.{ "pkg", "install", "foo", "bar" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "pkg", "install", "foo", "bar" }, config, null);
     try std.testing.expectError(error.MissingRequired, result);
 }
 
 test "parse: bool flag rejects inline value" {
     const Cli = struct { verbose: bool = false };
-    const result = parse(Cli, std.testing.allocator, &.{"--verbose=false"}, .{});
+    const result = parse(Cli, std.testing.allocator, &.{"--verbose=false"}, .{}, null);
     try std.testing.expectError(error.InvalidValue, result);
 }
 
@@ -1034,7 +638,7 @@ test "parse: positional plus invalid subcommand name" {
     };
 
     // "file.txt bogus" — first positional fills input, "bogus" is unknown subcommand
-    const result = parse(Cli, std.testing.allocator, &.{ "file.txt", "bogus" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "file.txt", "bogus" }, config, null);
     try std.testing.expectError(error.UnknownSubcommand, result);
 }
 
@@ -1051,7 +655,7 @@ test "parse: subcommand parsed then extra positional" {
     };
 
     // "run file.txt extra" — subcommand parsed, extra positional in sub-parser → TooManyPositionals
-    const result = parse(Cli, std.testing.allocator, &.{ "run", "file.txt", "extra" }, config);
+    const result = parse(Cli, std.testing.allocator, &.{ "run", "file.txt", "extra" }, config, null);
     try std.testing.expectError(error.TooManyPositionals, result);
 }
 
@@ -1076,7 +680,7 @@ test "parse: deinit default subcommand with non-empty multi field" {
 
     // No subcommand in argv → default value with static slice is kept.
     // deinit must not crash on the non-heap "default-pkg" slice.
-    var result = try parse(Cli, std.testing.allocator, &.{}, config);
+    var result = try parse(Cli, std.testing.allocator, &.{}, config, null);
     defer deinit(Cli, &result, std.testing.allocator, config);
 
     // Default value should be preserved.
@@ -1119,7 +723,7 @@ test "parse: deinit nested default subcommand with non-empty multi field" {
 
     // No subcommand parsed → nested defaults with static slices must be
     // heap-normalized so deinit does not perform an invalid free.
-    var result = try parse(Cli, std.testing.allocator, &.{}, config);
+    var result = try parse(Cli, std.testing.allocator, &.{}, config, null);
     defer deinit(Cli, &result, std.testing.allocator, config);
 
     try std.testing.expect(result.command != null);
@@ -1152,7 +756,7 @@ test "parse: subcommand name takes precedence over positional" {
 
     // "run" matches the subcommand variant name, so it is consumed as a
     // subcommand rather than filling the positional "input" field.
-    const result = parse(Cli, std.testing.allocator, &.{"run"}, config);
+    const result = parse(Cli, std.testing.allocator, &.{"run"}, config, null);
     try std.testing.expectError(error.MissingRequired, result);
 }
 
@@ -1171,7 +775,7 @@ test "parse: subcommand name takes precedence, dash-dash escapes to positional" 
 
     // "--" ends option/subcommand matching, so "run" is treated as a
     // positional value.
-    const result = try parse(Cli, std.testing.allocator, &.{ "--", "run" }, config);
+    const result = try parse(Cli, std.testing.allocator, &.{ "--", "run" }, config, null);
     try std.testing.expectEqualStrings("run", result.input);
     try std.testing.expect(result.command == null);
 }
@@ -1190,7 +794,7 @@ test "parse: subcommand name takes precedence, positional filled before subcomma
     };
 
     // "file.txt" fills the positional, then "run" matches the subcommand.
-    const result = try parse(Cli, std.testing.allocator, &.{ "file.txt", "run" }, config);
+    const result = try parse(Cli, std.testing.allocator, &.{ "file.txt", "run" }, config, null);
     try std.testing.expectEqualStrings("file.txt", result.input);
     try std.testing.expect(result.command != null);
 }
@@ -1209,7 +813,7 @@ test "parse: subcommand name takes precedence, kebab-case collision" {
     };
 
     // "dry-run" matches the kebab-case variant name "dry_run" → subcommand.
-    const result = parse(Cli, std.testing.allocator, &.{"dry-run"}, config);
+    const result = parse(Cli, std.testing.allocator, &.{"dry-run"}, config, null);
     try std.testing.expectError(error.MissingRequired, result);
 }
 
@@ -1225,9 +829,126 @@ test "parse: bool flag default true with subcommand succeeds" {
         .command = .{},
     };
 
-    const result = try parse(Cli, std.testing.allocator, &.{ "--flag", "run" }, config);
+    const result = try parse(Cli, std.testing.allocator, &.{ "--flag", "run" }, config, null);
     try std.testing.expect(result.flag == true);
     try std.testing.expect(result.command != null);
+}
+
+test "parse: diagnostic on InvalidValue" {
+    const Mode = enum { fast, slow };
+    const Cli = struct { mode: Mode = .fast };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "--mode", "invalid" }, .{}, &diag);
+    try std.testing.expectError(error.InvalidValue, result);
+    try std.testing.expectEqualStrings("mode", diag.arg_name);
+    try std.testing.expectEqualStrings("mode", diag.flag.long);
+    try std.testing.expectEqualStrings("invalid", diag.provided_value);
+    try std.testing.expectEqualStrings("one of: fast, slow", diag.expected);
+}
+
+test "parse: diagnostic on UnknownFlag" {
+    const Cli = struct { verbose: bool = false };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{"--unknown"}, .{}, &diag);
+    try std.testing.expectError(error.UnknownFlag, result);
+    try std.testing.expectEqualStrings("unknown", diag.flag.long);
+}
+
+test "parse: diagnostic on UnknownFlag short" {
+    const Cli = struct { verbose: bool = false };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{"-x"}, .{}, &diag);
+    try std.testing.expectError(error.UnknownFlag, result);
+    try std.testing.expectEqual(@as(u8, 'x'), diag.flag.short);
+}
+
+test "parse: diagnostic on MissingValue" {
+    const Cli = struct { output: []const u8 = "default" };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{"--output"}, .{}, &diag);
+    try std.testing.expectError(error.MissingValue, result);
+    try std.testing.expectEqualStrings("output", diag.arg_name);
+    try std.testing.expectEqualStrings("output", diag.flag.long);
+}
+
+test "parse: diagnostic on MissingRequired" {
+    const Cli = struct { host: []const u8 };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{}, .{
+        .host = .{ .positional = true },
+    }, &diag);
+    try std.testing.expectError(error.MissingRequired, result);
+    try std.testing.expectEqualStrings("host", diag.arg_name);
+}
+
+test "parse: diagnostic on ValueOutOfRange" {
+    const Cli = struct { port: u16 = 0 };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "--port", "99999" }, .{}, &diag);
+    try std.testing.expectError(error.ValueOutOfRange, result);
+    try std.testing.expectEqualStrings("port", diag.arg_name);
+    try std.testing.expectEqualStrings("port", diag.flag.long);
+    try std.testing.expectEqualStrings("99999", diag.provided_value);
+    try std.testing.expectEqualStrings("u16", diag.expected);
+}
+
+test "parse: diagnostic on DuplicateArg" {
+    const Cli = struct { verbose: bool = false };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "--verbose", "--verbose" }, .{}, &diag);
+    try std.testing.expectError(error.DuplicateArg, result);
+    try std.testing.expectEqualStrings("verbose", diag.arg_name);
+    try std.testing.expectEqualStrings("verbose", diag.flag.long);
+}
+
+test "parse: diagnostic on TooManyPositionals" {
+    const Cli = struct { file: []const u8 };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "a.txt", "extra" }, .{
+        .file = .{ .positional = true },
+    }, &diag);
+    try std.testing.expectError(error.TooManyPositionals, result);
+    try std.testing.expectEqualStrings("extra", diag.provided_value);
+    var buf: [256]u8 = undefined;
+    const rendered = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("invalid value 'extra'", rendered);
+}
+
+test "parse: diagnostic on UnknownSubcommand" {
+    const Command = union(enum) { run: struct {} };
+    const Cli = struct { command: Command };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{"bogus"}, .{ .command = .{} }, &diag);
+    try std.testing.expectError(error.UnknownSubcommand, result);
+    try std.testing.expectEqualStrings("bogus", diag.provided_value);
+    var buf: [256]u8 = undefined;
+    const rendered = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("invalid value 'bogus'", rendered);
+}
+
+test "parse: diagnostic on MissingSubcommand" {
+    const Command = union(enum) { run: struct {} };
+    const Cli = struct { command: Command };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{}, .{ .command = .{} }, &diag);
+    try std.testing.expectError(error.MissingSubcommand, result);
+    try std.testing.expectEqualStrings("command", diag.arg_name);
+}
+
+test "parse: diagnostic null is safe" {
+    const Cli = struct { verbose: bool = false };
+    const result = parse(Cli, std.testing.allocator, &.{"--unknown"}, .{}, null);
+    try std.testing.expectError(error.UnknownFlag, result);
+}
+
+test "parse: diagnostic format renders expected" {
+    const Cli = struct { port: u16 = 0 };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "--port", "abc" }, .{}, &diag);
+    try std.testing.expectError(error.InvalidValue, result);
+    var buf: [256]u8 = undefined;
+    const rendered = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("argument '--port': invalid value 'abc' (expected u16)", rendered);
 }
 
 test {

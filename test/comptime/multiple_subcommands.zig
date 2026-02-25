@@ -16,7 +16,7 @@ const T = struct {
 };
 
 comptime {
-    _ = parsz.parse(T, undefined, &.{}, .{});
+    _ = parsz.parse(T, undefined, &.{}, .{}, null);
 }
 
 test "multiple subcommand fields should fail at comptime" {

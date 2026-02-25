@@ -39,7 +39,7 @@ pub fn main() !void {
                 .force = .{ .short = 'f' },
             },
         },
-    }) catch |err| {
+    }, null) catch |err| {
         std.debug.print("error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };

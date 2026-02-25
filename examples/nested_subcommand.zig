@@ -76,7 +76,7 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, argv);
 
-    const cli = parsz.parse(Cli, allocator, argv[1..], config) catch |err| {
+    const cli = parsz.parse(Cli, allocator, argv[1..], config, null) catch |err| {
         std.debug.print("error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };

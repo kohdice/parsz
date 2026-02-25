@@ -11,7 +11,7 @@ const T = struct {
 comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .output2 = .{ .long = "output" },
-    });
+    }, null);
 }
 
 test "duplicate long option should fail at comptime" {}

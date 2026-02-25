@@ -9,7 +9,7 @@ const T = struct {
 comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .verbsoe = .{ .short = 'v' },
-    });
+    }, null);
 }
 
 test "unknown config key should fail at comptime" {

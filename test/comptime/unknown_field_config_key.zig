@@ -9,7 +9,7 @@ const T = struct {
 comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .input = .{ .positionl = true },
-    });
+    }, null);
 }
 
 test "unknown field config key should fail at comptime" {

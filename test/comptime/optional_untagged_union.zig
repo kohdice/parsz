@@ -12,7 +12,7 @@ const T = struct {
 };
 
 comptime {
-    _ = parsz.parse(T, undefined, &.{}, .{});
+    _ = parsz.parse(T, undefined, &.{}, .{}, null);
 }
 
 test "optional untagged union field should fail at comptime" {

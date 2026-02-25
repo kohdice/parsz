@@ -10,7 +10,7 @@ const T = struct {
 comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .verbose = .{ .action = .count },
-    });
+    }, null);
 }
 
 test "count action with non-integer type should fail at comptime" {

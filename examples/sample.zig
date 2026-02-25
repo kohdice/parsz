@@ -21,7 +21,7 @@ pub fn main() !void {
         .output = .{ .short = 'o', .help = "Output file path" },
         .count = .{ .help = "Repeat count" },
         .input = .{ .positional = true, .help = "Input file" },
-    }) catch |err| {
+    }, null) catch |err| {
         std.debug.print("error: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };

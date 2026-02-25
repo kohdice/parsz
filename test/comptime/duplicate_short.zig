@@ -12,7 +12,7 @@ comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .verbose = .{ .short = 'v' },
         .version = .{ .short = 'v' },
-    });
+    }, null);
 }
 
 test "duplicate short option should fail at comptime" {

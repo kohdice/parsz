@@ -11,7 +11,7 @@ const T = struct {
 comptime {
     _ = parsz.parse(T, undefined, &.{}, .{
         .verbose = .{ .action = .count, .positional = true },
-    });
+    }, null);
 }
 
 test "count with positional should fail at comptime" {
