@@ -14,7 +14,7 @@ parsz is a command-line argument parser library using only the Zig standard libr
 ## Build Commands
 
 ```bash
-zig build test            # Run library tests (src/parsz.zig + submodule tests)
+zig build test            # Run library tests (src/parsz.zig + compile-time validation tests)
 zig fmt --check .         # Format check (CI runs this)
 ```
 
