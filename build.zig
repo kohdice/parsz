@@ -35,6 +35,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/unknown_field_config_key.zig", "unknown field config key 'positionl' for field 'input'" },
         .{ "test/comptime/positional_short.zig", "positional fields cannot have short options" },
         .{ "test/comptime/positional_long.zig", "positional fields cannot have long options" },
+        .{ "test/comptime/unknown_meta_key.zig", "expected one of: name, about, version" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
