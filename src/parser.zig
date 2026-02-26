@@ -513,6 +513,12 @@ pub fn handleLong(
             return true;
         }
     }
+    // Built-in help flag (only if no user field matched)
+    if (comptime hasBuiltinHelpLong(T, config)) {
+        if (std.mem.eql(u8, long.name, "help")) {
+            return error.HelpRequested;
+        }
+    }
     // Unknown long flag
     if (diagnostic) |d| d.* = .{
         .flag = .{ .long = long.name },
@@ -608,6 +614,12 @@ pub fn handleShort(
                 user_set.insert(@field(FieldEnum, field.name));
                 return true;
             }
+        }
+    }
+    // Built-in help flag (only if no user field matched)
+    if (comptime hasBuiltinHelpShort(T, config)) {
+        if (ch == 'h') {
+            return error.HelpRequested;
         }
     }
     // Unknown short flag
@@ -1244,4 +1256,26 @@ test "parser: bool flag long short mixed duplicate returns DuplicateArg" {
         .verbose = .{ .short = 'v' },
     });
     try std.testing.expectError(error.DuplicateArg, result);
+}
+
+pub fn hasBuiltinHelpShort(comptime T: type, comptime config: anytype) bool {
+    const fields = @typeInfo(T).@"struct".fields;
+    inline for (fields) |field| {
+        const fc = comptime getFieldConfig(config, field.name);
+        if (fc.short) |s| {
+            if (s == 'h') return false;
+        }
+    }
+    return true;
+}
+
+pub fn hasBuiltinHelpLong(comptime T: type, comptime config: anytype) bool {
+    const fields = @typeInfo(T).@"struct".fields;
+    inline for (fields) |field| {
+        const fc = comptime getFieldConfig(config, field.name);
+        const kind = comptime argKind(field.type, fc);
+        if (kind == .subcommand or kind == .positional or (kind == .multi and fc.positional)) continue;
+        if (std.mem.eql(u8, comptime longName(field.name, fc), "help")) return false;
+    }
+    return true;
 }
