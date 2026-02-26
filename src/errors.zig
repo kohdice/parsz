@@ -10,6 +10,7 @@ pub const ParseError = error{
     DuplicateArg,
     UnknownSubcommand,
     MissingSubcommand,
+    HelpRequested,
 };
 
 pub const FlagRef = union(enum) {
