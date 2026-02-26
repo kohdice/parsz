@@ -5,6 +5,7 @@ const argKind = spec_arg.argKind;
 const getFieldConfig = spec_arg.getFieldConfig;
 const longName = spec_arg.longName;
 const isSubcommandType = spec_arg.isSubcommandType;
+const MetaConfig = spec_arg.MetaConfig;
 
 pub fn validate(comptime T: type, comptime config: anytype) void {
     const fields = @typeInfo(T).@"struct".fields;
@@ -15,6 +16,7 @@ pub fn validate(comptime T: type, comptime config: anytype) void {
     checkSingleSubcommand(fields, config);
     checkUnknownConfigKeys(T, fields, config);
     checkUnknownFieldConfigKeys(fields, config);
+    checkMetaConfigKeys(config);
     checkUntaggedUnions(fields);
     checkPositionalOrdering(fields, config);
     checkCountPositionalConflict(fields, config);
@@ -94,6 +96,7 @@ fn checkUnknownConfigKeys(comptime T: type, comptime fields: anytype, comptime c
         const config_info = @typeInfo(Config);
         if (config_info == .@"struct" and Config != @TypeOf(.{})) {
             for (config_info.@"struct".fields) |cf| {
+                if (std.mem.eql(u8, cf.name, "_meta")) continue;
                 var found = false;
                 for (fields) |field| {
                     if (std.mem.eql(u8, cf.name, field.name)) {
@@ -104,6 +107,40 @@ fn checkUnknownConfigKeys(comptime T: type, comptime fields: anytype, comptime c
                 if (!found) {
                     @compileError("unknown config key '" ++ cf.name ++ "' does not match any field in " ++ @typeName(T));
                 }
+            }
+        }
+    }
+}
+
+fn checkMetaConfigKeys(comptime config: anytype) void {
+    comptime {
+        const Config = @TypeOf(config);
+        const config_info = @typeInfo(Config);
+        if (config_info != .@"struct" or Config == @TypeOf(.{})) return;
+
+        for (config_info.@"struct".fields) |cf| {
+            if (std.mem.eql(u8, cf.name, "_meta")) {
+                const val = @field(config, "_meta");
+                const ValType = @TypeOf(val);
+                if (ValType == MetaConfig) return;
+
+                const val_info = @typeInfo(ValType);
+                if (val_info != .@"struct") {
+                    @compileError("'_meta' config must be a struct, found " ++ @typeName(ValType));
+                }
+
+                for (val_info.@"struct".fields) |vf| {
+                    const is_known = blk: {
+                        for (@typeInfo(MetaConfig).@"struct".fields) |mc_field| {
+                            if (std.mem.eql(u8, vf.name, mc_field.name)) break :blk true;
+                        }
+                        break :blk false;
+                    };
+                    if (!is_known) {
+                        @compileError("unknown _meta config key '" ++ vf.name ++ "'; expected one of: name, about, version");
+                    }
+                }
+                return;
             }
         }
     }
