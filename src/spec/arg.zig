@@ -100,6 +100,39 @@ pub fn longName(comptime field_name: []const u8, comptime fc: FieldConfig) []con
     return comptime snakeToKebab(field_name);
 }
 
+pub const MetaConfig = struct {
+    name: ?[]const u8 = null,
+    about: ?[]const u8 = null,
+    version: ?[]const u8 = null,
+};
+
+pub fn getMetaConfig(comptime config: anytype) MetaConfig {
+    const Config = @TypeOf(config);
+    if (Config == @TypeOf(.{})) return .{};
+    const config_info = @typeInfo(Config);
+    if (config_info != .@"struct") return .{};
+
+    inline for (config_info.@"struct".fields) |cf| {
+        if (comptime std.mem.eql(u8, cf.name, "_meta")) {
+            const val = @field(config, "_meta");
+            const ValType = @TypeOf(val);
+            if (ValType == MetaConfig) return val;
+
+            const val_info = @typeInfo(ValType);
+            if (val_info != .@"struct") return .{};
+
+            var result = MetaConfig{};
+            inline for (val_info.@"struct".fields) |vf| {
+                if (comptime std.mem.eql(u8, vf.name, "name")) result.name = @field(val, "name");
+                if (comptime std.mem.eql(u8, vf.name, "about")) result.about = @field(val, "about");
+                if (comptime std.mem.eql(u8, vf.name, "version")) result.version = @field(val, "version");
+            }
+            return result;
+        }
+    }
+    return .{};
+}
+
 pub const ArgSpec = struct {
     field_name: []const u8,
     short: ?u8,
