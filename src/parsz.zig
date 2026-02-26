@@ -2,6 +2,9 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const spec_command = @import("spec/command.zig");
 const errors_mod = @import("errors.zig");
+const validator = @import("validator.zig");
+const help_usage = @import("help/usage.zig");
+const help_render = @import("help/render.zig");
 
 pub const ParseError = errors_mod.ParseError;
 pub const Diagnostic = errors_mod.Diagnostic;
@@ -53,6 +56,38 @@ pub fn deinit(
 ) void {
     @setEvalBranchQuota(10_000);
     parser.deinitFields(T, result, allocator, config);
+}
+
+/// Write the complete help text for the CLI type T.
+///
+/// Generates formatted help output including about text, usage line,
+/// arguments, options (with defaults), and subcommand listing.
+/// The help text is derived from the type definition and config at compile time.
+pub fn help(comptime T: type, comptime config: anytype, writer: anytype) !void {
+    @setEvalBranchQuota(10_000);
+    comptime {
+        validator.validate(T, config);
+        const cmd_spec = spec_command.buildSpec(T, config);
+        if (cmd_spec.subcommand_field) |sfn| {
+            validator.validateSubcommandConfig(T, config, sfn);
+        }
+    }
+    try help_render.writeHelp(T, config, writer);
+}
+
+/// Write the usage line for the CLI type T.
+///
+/// Generates a single-line usage summary (e.g., "Usage: myapp [OPTIONS] <INPUT>").
+pub fn usage(comptime T: type, comptime config: anytype, writer: anytype) !void {
+    @setEvalBranchQuota(10_000);
+    comptime {
+        validator.validate(T, config);
+        const cmd_spec = spec_command.buildSpec(T, config);
+        if (cmd_spec.subcommand_field) |sfn| {
+            validator.validateSubcommandConfig(T, config, sfn);
+        }
+    }
+    try help_usage.writeUsage(T, config, writer);
 }
 
 test "parse: basic flag" {
@@ -951,8 +986,103 @@ test "parse: diagnostic format renders expected" {
     try std.testing.expectEqualStrings("argument '--port': invalid value 'abc' (expected u16)", rendered);
 }
 
+test "parse: --help returns HelpRequested" {
+    const Cli = struct { verbose: bool = false };
+    const result = parse(Cli, std.testing.allocator, &.{"--help"}, .{}, null);
+    try std.testing.expectError(error.HelpRequested, result);
+}
+
+test "parse: -h returns HelpRequested" {
+    const Cli = struct { verbose: bool = false };
+    const result = parse(Cli, std.testing.allocator, &.{"-h"}, .{}, null);
+    try std.testing.expectError(error.HelpRequested, result);
+}
+
+test "parse: --help=value returns HelpRequested" {
+    const Cli = struct { verbose: bool = false };
+    const result = parse(Cli, std.testing.allocator, &.{"--help=anything"}, .{}, null);
+    try std.testing.expectError(error.HelpRequested, result);
+}
+
+test "parse: -- --help does not trigger help" {
+    const Cli = struct { input: []const u8 };
+    const result = try parse(Cli, std.testing.allocator, &.{ "--", "--help" }, .{
+        .input = .{ .positional = true },
+    }, null);
+    try std.testing.expectEqualStrings("--help", result.input);
+}
+
+test "parse: -h overridden by user config does not trigger help" {
+    const Cli = struct { host: []const u8 = "localhost" };
+    const result = try parse(Cli, std.testing.allocator, &.{ "-h", "example.com" }, .{
+        .host = .{ .short = 'h' },
+    }, null);
+    try std.testing.expectEqualStrings("example.com", result.host);
+}
+
+test "parse: --help overridden by user config does not trigger help" {
+    const Cli = struct { help: bool = false };
+    const result = try parse(Cli, std.testing.allocator, &.{"--help"}, .{}, null);
+    try std.testing.expect(result.help);
+}
+
+test "parse: subcommand --help propagates HelpRequested" {
+    const Command = union(enum) {
+        run: struct { file: []const u8 = "default" },
+    };
+    const Cli = struct {
+        verbose: bool = false,
+        command: ?Command = null,
+    };
+    const result = parse(Cli, std.testing.allocator, &.{ "run", "--help" }, .{
+        .command = .{},
+    }, null);
+    try std.testing.expectError(error.HelpRequested, result);
+}
+
+test "parse: _meta config is accepted without error" {
+    const Cli = struct { verbose: bool = false };
+    const result = try parse(Cli, std.testing.allocator, &.{"--verbose"}, .{
+        ._meta = .{ .name = "myapp", .about = "A test app" },
+    }, null);
+    try std.testing.expect(result.verbose);
+}
+
+test "parse: help() produces output" {
+    const Cli = struct {
+        verbose: bool = false,
+        input: []const u8,
+    };
+    var buf: [1024]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try help(Cli, .{
+        ._meta = .{ .name = "myapp", .about = "A test app" },
+        .verbose = .{ .short = 'v', .help = "Enable verbose output" },
+        .input = .{ .positional = true, .help = "Input file" },
+    }, stream.writer());
+    const output = stream.getWritten();
+    try std.testing.expect(output.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, output, "A test app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Usage: myapp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "--verbose") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "<INPUT>") != null);
+}
+
+test "parse: usage() produces output" {
+    const Cli = struct { input: []const u8 };
+    var buf: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try usage(Cli, .{
+        ._meta = .{ .name = "myapp" },
+        .input = .{ .positional = true },
+    }, stream.writer());
+    try std.testing.expectEqualStrings("Usage: myapp [OPTIONS] <INPUT>\n", stream.getWritten());
+}
+
 test {
     _ = @import("parser.zig");
     _ = @import("tokenizer.zig");
     _ = @import("errors.zig");
+    _ = @import("help/usage.zig");
+    _ = @import("help/render.zig");
 }
