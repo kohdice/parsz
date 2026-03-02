@@ -36,6 +36,10 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/positional_short.zig", "positional fields cannot have short options" },
         .{ "test/comptime/positional_long.zig", "positional fields cannot have long options" },
         .{ "test/comptime/unknown_meta_key.zig", "expected one of: name, about, version" },
+        .{ "test/comptime/constraint_unknown_field.zig", "conflicts_with referencing unknown field 'nonexistent'" },
+        .{ "test/comptime/constraint_self_reference.zig", "conflicts_with referencing itself" },
+        .{ "test/comptime/constraint_on_subcommand.zig", "is a subcommand and cannot have constraints" },
+        .{ "test/comptime/required_unless_no_default.zig", "non-optional with no default; use ?T or provide a default value" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",

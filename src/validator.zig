@@ -6,6 +6,7 @@ const getFieldConfig = spec_arg.getFieldConfig;
 const longName = spec_arg.longName;
 const isSubcommandType = spec_arg.isSubcommandType;
 const MetaConfig = spec_arg.MetaConfig;
+const constraint = @import("spec/constraint.zig");
 
 pub fn validate(comptime T: type, comptime config: anytype) void {
     const fields = @typeInfo(T).@"struct".fields;
@@ -21,6 +22,10 @@ pub fn validate(comptime T: type, comptime config: anytype) void {
     checkPositionalOrdering(fields, config);
     checkCountPositionalConflict(fields, config);
     checkPositionalOptionConflict(fields, config);
+    checkConstraintTargetExists(fields, config);
+    checkConstraintSelfReference(fields, config);
+    checkConstraintSubcommandExclusion(fields, config);
+    checkRequiredUnlessPresentFieldType(fields, config);
 }
 
 fn checkDuplicateShorts(comptime fields: anytype, comptime config: anytype) void {
@@ -247,6 +252,79 @@ fn checkPositionalOptionConflict(comptime fields: anytype, comptime config: anyt
                 }
                 if (fc.long != null) {
                     @compileError("field '" ++ field.name ++ "' has both .positional = true and explicit .long option; positional fields cannot have long options");
+                }
+            }
+        }
+    }
+}
+
+fn checkConstraintTargetExists(comptime fields: anytype, comptime config: anytype) void {
+    comptime {
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            for (fc.conflicts_with) |target| {
+                if (!constraint.fieldExists(fields, target)) {
+                    @compileError("field '" ++ field.name ++ "' has conflicts_with referencing unknown field '" ++ target ++ "'");
+                }
+            }
+            for (fc.requires) |target| {
+                if (!constraint.fieldExists(fields, target)) {
+                    @compileError("field '" ++ field.name ++ "' has requires referencing unknown field '" ++ target ++ "'");
+                }
+            }
+            for (fc.required_unless_present) |target| {
+                if (!constraint.fieldExists(fields, target)) {
+                    @compileError("field '" ++ field.name ++ "' has required_unless_present referencing unknown field '" ++ target ++ "'");
+                }
+            }
+        }
+    }
+}
+
+fn checkConstraintSelfReference(comptime fields: anytype, comptime config: anytype) void {
+    comptime {
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            for (fc.conflicts_with) |target| {
+                if (std.mem.eql(u8, target, field.name)) {
+                    @compileError("field '" ++ field.name ++ "' has conflicts_with referencing itself");
+                }
+            }
+            for (fc.requires) |target| {
+                if (std.mem.eql(u8, target, field.name)) {
+                    @compileError("field '" ++ field.name ++ "' has requires referencing itself");
+                }
+            }
+            for (fc.required_unless_present) |target| {
+                if (std.mem.eql(u8, target, field.name)) {
+                    @compileError("field '" ++ field.name ++ "' has required_unless_present referencing itself");
+                }
+            }
+        }
+    }
+}
+
+fn checkConstraintSubcommandExclusion(comptime fields: anytype, comptime config: anytype) void {
+    comptime {
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            const kind = argKind(field.type, fc);
+            if (kind == .subcommand) {
+                if (fc.conflicts_with.len > 0 or fc.requires.len > 0 or fc.required_unless_present.len > 0) {
+                    @compileError("field '" ++ field.name ++ "' is a subcommand and cannot have constraints");
+                }
+            }
+        }
+    }
+}
+
+fn checkRequiredUnlessPresentFieldType(comptime fields: anytype, comptime config: anytype) void {
+    comptime {
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            if (fc.required_unless_present.len > 0) {
+                if (@typeInfo(field.type) != .optional and field.default_value_ptr == null) {
+                    @compileError("field '" ++ field.name ++ "' has required_unless_present but is non-optional with no default; use ?T or provide a default value");
                 }
             }
         }
