@@ -141,3 +141,86 @@ test "constraint: required_unless_present not exempted" {
     const exempted = checkRequiredUnlessPresent(TestCli, test_config, user_set, "input");
     try std.testing.expect(!exempted);
 }
+
+// --- Multi-target constraint tests (independent fixtures) ---
+
+const MultiConflictCli = struct {
+    json: bool = false,
+    csv: bool = false,
+    xml: bool = false,
+};
+
+const multi_conflict_config = .{
+    .json = .{ .short = 'j', .conflicts_with = &.{ "csv", "xml" } },
+    .csv = .{ .short = 'c' },
+    .xml = .{ .short = 'x' },
+};
+
+test "constraint: conflicts_with multiple targets" {
+    const FieldEnum = std.meta.FieldEnum(MultiConflictCli);
+
+    // json + xml both user-set → ConflictingArgs on first conflicting target (csv comes before xml in config order)
+    {
+        var user_set = std.EnumSet(FieldEnum).initEmpty();
+        user_set.insert(.json);
+        user_set.insert(.xml);
+        var diag: Diagnostic = .{};
+        const result = evaluate(MultiConflictCli, multi_conflict_config, user_set, &diag);
+        try std.testing.expectError(error.ConflictingArgs, result);
+        try std.testing.expectEqualStrings("json", diag.arg_name);
+    }
+
+    // json + csv + xml all user-set → ConflictingArgs (stops at first conflict: csv)
+    {
+        var user_set = std.EnumSet(FieldEnum).initEmpty();
+        user_set.insert(.json);
+        user_set.insert(.csv);
+        user_set.insert(.xml);
+        var diag: Diagnostic = .{};
+        const result = evaluate(MultiConflictCli, multi_conflict_config, user_set, &diag);
+        try std.testing.expectError(error.ConflictingArgs, result);
+        try std.testing.expectEqualStrings("json", diag.arg_name);
+    }
+
+    // json alone → success
+    {
+        var user_set = std.EnumSet(FieldEnum).initEmpty();
+        user_set.insert(.json);
+        try evaluate(MultiConflictCli, multi_conflict_config, user_set, null);
+    }
+}
+
+const MultiRequiresCli = struct {
+    format: ?[]const u8 = null,
+    output: ?[]const u8 = null,
+    input: ?[]const u8 = null,
+};
+
+const multi_requires_config = .{
+    .format = .{ .requires = &.{ "output", "input" } },
+};
+
+test "constraint: requires multiple targets" {
+    const FieldEnum = std.meta.FieldEnum(MultiRequiresCli);
+
+    // format set + output set + input not set → MissingRequiredBy
+    {
+        var user_set = std.EnumSet(FieldEnum).initEmpty();
+        user_set.insert(.format);
+        user_set.insert(.output);
+        var diag: Diagnostic = .{};
+        const result = evaluate(MultiRequiresCli, multi_requires_config, user_set, &diag);
+        try std.testing.expectError(error.MissingRequiredBy, result);
+        try std.testing.expectEqualStrings("format", diag.arg_name);
+        try std.testing.expect(std.mem.indexOf(u8, diag.message, "input") != null);
+    }
+
+    // format set + output set + input set → success
+    {
+        var user_set = std.EnumSet(FieldEnum).initEmpty();
+        user_set.insert(.format);
+        user_set.insert(.output);
+        user_set.insert(.input);
+        try evaluate(MultiRequiresCli, multi_requires_config, user_set, null);
+    }
+}
