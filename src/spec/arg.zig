@@ -51,6 +51,9 @@ pub const FieldConfig = struct {
     value_name: ?[]const u8 = null,
     positional: bool = false,
     action: Action = .set,
+    conflicts_with: []const []const u8 = &.{},
+    requires: []const []const u8 = &.{},
+    required_unless_present: []const []const u8 = &.{},
 
     pub const Action = enum { set, count };
 };
@@ -78,6 +81,9 @@ pub fn getFieldConfig(comptime config: anytype, comptime field_name: []const u8)
                 if (comptime std.mem.eql(u8, vf.name, "value_name")) result.value_name = @field(val, "value_name");
                 if (comptime std.mem.eql(u8, vf.name, "positional")) result.positional = @field(val, "positional");
                 if (comptime std.mem.eql(u8, vf.name, "action")) result.action = @field(val, "action");
+                if (comptime std.mem.eql(u8, vf.name, "conflicts_with")) result.conflicts_with = @field(val, "conflicts_with");
+                if (comptime std.mem.eql(u8, vf.name, "requires")) result.requires = @field(val, "requires");
+                if (comptime std.mem.eql(u8, vf.name, "required_unless_present")) result.required_unless_present = @field(val, "required_unless_present");
             }
             return result;
         }
