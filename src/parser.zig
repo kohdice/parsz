@@ -280,6 +280,7 @@ pub fn parseCore(
                                     else
                                         @unionInit(SubUnion, sf.name, sub_result);
                                 field_set.insert(@field(FieldEnum, subcmd_field_name.?));
+                                user_set.insert(@field(FieldEnum, subcmd_field_name.?));
                                 subcmd_parsed = true;
                                 tokenizer.index = tokenizer.args.len;
                                 found_sub = true;
@@ -287,7 +288,7 @@ pub fn parseCore(
                         }
                     }
                     if (!found_sub) {
-                        if (!try handlePositional(T, config, &result, &field_set, &lists, &positional_index, val, allocator, diagnostic)) {
+                        if (!try handlePositional(T, config, &result, &field_set, &user_set, &lists, &positional_index, val, allocator, diagnostic)) {
                             const sub_fields_2 = @typeInfo(SubUnion).@"union".fields;
                             if (sub_fields_2.len > 0 and !subcmd_parsed and !tokenizer.options_ended) {
                                 if (diagnostic) |d| d.* = .{ .provided_value = val };
@@ -320,7 +321,7 @@ pub fn parseCore(
     // 6. Deferred positionals processing (non-subcommand mode only)
     if (comptime subcmd_field_name == null) {
         for (deferred_positionals.items) |pos_val| {
-            if (!try handlePositional(T, config, &result, &field_set, &lists, &positional_index, pos_val, allocator, diagnostic)) {
+            if (!try handlePositional(T, config, &result, &field_set, &user_set, &lists, &positional_index, pos_val, allocator, diagnostic)) {
                 if (diagnostic) |d| d.* = .{ .provided_value = pos_val };
                 return error.TooManyPositionals;
             }
@@ -348,7 +349,7 @@ pub fn parseCore(
             } else {
                 if (diagnostic) |d| d.* = .{
                     .arg_name = field.name,
-                    .flag = if (comptime argKind(field.type, fc) == .positional or (argKind(field.type, fc) == .multi and fc.positional))
+                    .flag = if (comptime kind == .positional or (kind == .multi and fc.positional))
                         .none
                     else
                         .{ .long = comptime longName(field.name, fc) },
@@ -356,6 +357,39 @@ pub fn parseCore(
                 return error.MissingRequired;
             }
         }
+    }
+
+    // 8.25 required_unless_present check (user_set-based)
+    {
+        const constraint_engine = @import("constraint/engine.zig");
+        inline for (fields) |field| {
+            const fc = comptime getFieldConfig(config, field.name);
+            if (comptime fc.required_unless_present.len > 0) {
+                if (!user_set.contains(@field(FieldEnum, field.name))) {
+                    if (!constraint_engine.checkRequiredUnlessPresent(T, config, user_set, field.name)) {
+                        const kind = comptime argKind(field.type, fc);
+                        if (diagnostic) |d| {
+                            const spec_constraint = @import("spec/constraint.zig");
+                            d.* = .{
+                                .arg_name = field.name,
+                                .flag = if (comptime kind == .positional or (kind == .multi and fc.positional))
+                                    .none
+                                else
+                                    .{ .long = comptime longName(field.name, fc) },
+                                .message = comptime spec_constraint.requiredUnlessMessage(config, fc.required_unless_present),
+                            };
+                        }
+                        return error.MissingRequired;
+                    }
+                }
+            }
+        }
+    }
+
+    // 8.5 Constraint evaluation (conflicts_with, requires)
+    {
+        const constraint_engine = @import("constraint/engine.zig");
+        try constraint_engine.evaluate(T, config, user_set, diagnostic);
     }
 
     // 9. Multi field finalization + errdefer (shared)
@@ -459,6 +493,7 @@ pub fn handleLong(
                         @field(result, field.name) = 1;
                         field_set.insert(@field(FieldEnum, field.name));
                     }
+                    user_set.insert(@field(FieldEnum, field.name));
                 } else {
                     if (user_set.contains(@field(FieldEnum, field.name))) {
                         if (diagnostic) |d| d.* = .{
@@ -490,6 +525,7 @@ pub fn handleLong(
                 const Child = comptime sliceChild(field.type);
                 const converted = try convertValue(Child, raw_value, diagnostic, field.name, .{ .long = comptime longName(field.name, fc) });
                 try @field(lists, field.name).append(allocator, converted);
+                user_set.insert(@field(FieldEnum, field.name));
                 return true;
             }
 
@@ -557,6 +593,7 @@ pub fn handleShort(
                             @field(result, field.name) = 1;
                             field_set.insert(@field(FieldEnum, field.name));
                         }
+                        user_set.insert(@field(FieldEnum, field.name));
                     } else {
                         if (user_set.contains(@field(FieldEnum, field.name))) {
                             if (diagnostic) |d| d.* = .{
@@ -593,6 +630,7 @@ pub fn handleShort(
                     const Child = comptime sliceChild(field.type);
                     const converted = try convertValue(Child, raw_value, diagnostic, field.name, .{ .short = s });
                     try @field(lists, field.name).append(allocator, converted);
+                    user_set.insert(@field(FieldEnum, field.name));
                     return true;
                 }
 
@@ -634,6 +672,7 @@ pub fn handlePositional(
     comptime config: anytype,
     result: *T,
     field_set: anytype,
+    user_set: anytype,
     lists: anytype,
     positional_index: *usize,
     raw_value: [:0]const u8,
@@ -653,6 +692,7 @@ pub fn handlePositional(
                 const converted = try convertValue(ValueType, raw_value, diagnostic, field.name, .none);
                 @field(result, field.name) = converted;
                 field_set.insert(@field(FieldEnum, field.name));
+                user_set.insert(@field(FieldEnum, field.name));
                 positional_index.* += 1;
                 return true;
             }
@@ -662,6 +702,7 @@ pub fn handlePositional(
                 const Child = comptime sliceChild(field.type);
                 const converted = try convertValue(Child, raw_value, diagnostic, field.name, .none);
                 try @field(lists, field.name).append(allocator, converted);
+                user_set.insert(@field(FieldEnum, field.name));
                 return true;
             }
             current_pos += 1;

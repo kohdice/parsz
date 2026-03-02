@@ -1079,10 +1079,115 @@ test "parse: usage() produces output" {
     try std.testing.expectEqualStrings("Usage: myapp [OPTIONS] <INPUT>\n", stream.getWritten());
 }
 
+test "parse: conflicts_with rejects both present" {
+    const Cli = struct {
+        json: bool = false,
+        csv: bool = false,
+    };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "--json", "--csv" }, .{
+        .json = .{ .conflicts_with = &.{"csv"} },
+    }, &diag);
+    try std.testing.expectError(error.ConflictingArgs, result);
+    try std.testing.expectEqualStrings("json", diag.arg_name);
+}
+
+test "parse: conflicts_with allows one side" {
+    const Cli = struct {
+        json: bool = false,
+        csv: bool = false,
+    };
+    const result = try parse(Cli, std.testing.allocator, &.{"--json"}, .{
+        .json = .{ .conflicts_with = &.{"csv"} },
+    }, null);
+    try std.testing.expect(result.json);
+    try std.testing.expect(!result.csv);
+}
+
+test "parse: conflicts_with with short flags" {
+    const Cli = struct {
+        json: bool = false,
+        csv: bool = false,
+    };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "-j", "-c" }, .{
+        .json = .{ .short = 'j', .conflicts_with = &.{"csv"} },
+        .csv = .{ .short = 'c' },
+    }, &diag);
+    try std.testing.expectError(error.ConflictingArgs, result);
+}
+
+test "parse: requires satisfied" {
+    const Cli = struct {
+        output: ?[]const u8 = null,
+        format: ?[]const u8 = null,
+    };
+    const result = try parse(Cli, std.testing.allocator, &.{ "--format", "json", "--output", "out.txt" }, .{
+        .format = .{ .requires = &.{"output"} },
+    }, null);
+    try std.testing.expectEqualStrings("json", result.format.?);
+    try std.testing.expectEqualStrings("out.txt", result.output.?);
+}
+
+test "parse: requires missing target" {
+    const Cli = struct {
+        output: ?[]const u8 = null,
+        format: ?[]const u8 = null,
+    };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "--format", "json" }, .{
+        .format = .{ .requires = &.{"output"} },
+    }, &diag);
+    try std.testing.expectError(error.MissingRequiredBy, result);
+    try std.testing.expectEqualStrings("format", diag.arg_name);
+}
+
+test "parse: required_unless_present exempted" {
+    const Cli = struct {
+        input: ?[]const u8 = null,
+        stdin: bool = false,
+    };
+    const result = try parse(Cli, std.testing.allocator, &.{"--stdin"}, .{
+        .input = .{ .positional = true, .required_unless_present = &.{"stdin"} },
+    }, null);
+    try std.testing.expect(result.input == null);
+    try std.testing.expect(result.stdin);
+}
+
+test "parse: required_unless_present not exempted" {
+    const Cli = struct {
+        input: ?[]const u8 = null,
+        stdin: bool = false,
+    };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{}, .{
+        .input = .{ .positional = true, .required_unless_present = &.{"stdin"} },
+    }, &diag);
+    try std.testing.expectError(error.MissingRequired, result);
+    try std.testing.expectEqualStrings("input", diag.arg_name);
+    try std.testing.expect(diag.message.len > 0);
+}
+
+test "parse: constraint diagnostic message" {
+    const Cli = struct {
+        json: bool = false,
+        csv: bool = false,
+    };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{ "--json", "--csv" }, .{
+        .json = .{ .short = 'j', .conflicts_with = &.{"csv"} },
+    }, &diag);
+    try std.testing.expectError(error.ConflictingArgs, result);
+    var buf: [256]u8 = undefined;
+    const rendered = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "cannot be used with") != null);
+}
+
 test {
     _ = @import("parser.zig");
     _ = @import("tokenizer.zig");
     _ = @import("errors.zig");
     _ = @import("help/usage.zig");
     _ = @import("help/render.zig");
+    _ = @import("constraint/engine.zig");
 }
