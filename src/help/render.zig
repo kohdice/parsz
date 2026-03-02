@@ -618,3 +618,81 @@ test "help: kebab-case subcommand names" {
     ;
     try std.testing.expectEqualStrings(expected, stream.getWritten());
 }
+
+test "golden: help with all field types" {
+    const Command = union(enum) {
+        build: struct {},
+        test_cmd: struct {},
+    };
+    const Cli = struct {
+        verbose: bool = false,
+        output: []const u8 = "a.out",
+        input: []const u8,
+        files: []const []const u8 = &.{},
+        command: ?Command = null,
+    };
+    var buf: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeHelp(Cli, .{
+        ._meta = .{ .name = "golden", .about = "Golden test CLI with all field types" },
+        .verbose = .{ .short = 'v', .help = "Enable verbose output" },
+        .output = .{ .short = 'o', .help = "Output file path", .value_name = "PATH" },
+        .input = .{ .positional = true, .help = "Input file" },
+        .files = .{ .positional = true, .help = "Additional files" },
+        .command = .{},
+    }, stream.writer());
+    const expected =
+        \\Golden test CLI with all field types
+        \\
+        \\Usage: golden [OPTIONS] <INPUT> [FILES...] [COMMAND]
+        \\
+        \\Arguments:
+        \\  <INPUT>  Input file
+        \\  [FILES...]  Additional files
+        \\
+        \\Options:
+        \\  -v, --verbose        Enable verbose output
+        \\  -o, --output <PATH>  Output file path [default: a.out]
+        \\  -h, --help           Print help
+        \\
+        \\Commands:
+        \\  build
+        \\  test-cmd
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, stream.getWritten());
+}
+
+test "golden: help with constraints" {
+    const Cli = struct {
+        json: bool = false,
+        csv: bool = false,
+        output: ?[]const u8 = null,
+        format: ?[]const u8 = null,
+    };
+    var buf: [2048]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeHelp(Cli, .{
+        ._meta = .{ .name = "fmt-tool", .about = "Format conversion tool" },
+        .json = .{ .short = 'j', .help = "Use JSON output", .conflicts_with = &.{"csv"} },
+        .csv = .{ .short = 'c', .help = "Use CSV output", .conflicts_with = &.{"json"} },
+        .output = .{ .short = 'o', .help = "Output file path", .value_name = "PATH" },
+        .format = .{ .help = "Output format string", .requires = &.{"output"} },
+    }, stream.writer());
+    // Constraint information is NOT displayed in help text (current behavior).
+    // This test verifies that constraint settings do not break help output stability.
+    const expected =
+        \\Format conversion tool
+        \\
+        \\Usage: fmt-tool [OPTIONS]
+        \\
+        \\Options:
+        \\  -j, --json             Use JSON output
+        \\  -c, --csv              Use CSV output
+        \\  -o, --output <PATH>    Output file path
+        \\      --format <FORMAT>  Output format string
+        \\  -h, --help             Print help
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, stream.getWritten());
+}

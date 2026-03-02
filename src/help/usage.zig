@@ -231,3 +231,28 @@ test "usage: always shows [OPTIONS] when built-in help is active" {
     }, stream.writer());
     try std.testing.expectEqualStrings("Usage: myapp [OPTIONS] <INPUT>\n", stream.getWritten());
 }
+
+test "golden: usage with multi positional and subcommand" {
+    const Command = union(enum) {
+        build: struct {},
+        test_cmd: struct {},
+    };
+    const Cli = struct {
+        verbose: bool = false,
+        input: []const u8,
+        extra: ?[]const u8 = null,
+        files: []const []const u8 = &.{},
+        command: ?Command = null,
+    };
+    var buf: [512]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try writeUsage(Cli, .{
+        ._meta = .{ .name = "golden" },
+        .verbose = .{ .short = 'v' },
+        .input = .{ .positional = true },
+        .extra = .{ .positional = true, .value_name = "EXTRA" },
+        .files = .{ .positional = true, .value_name = "FILE" },
+        .command = .{},
+    }, stream.writer());
+    try std.testing.expectEqualStrings("Usage: golden [OPTIONS] <INPUT> [EXTRA] [FILE...] [COMMAND]\n", stream.getWritten());
+}
