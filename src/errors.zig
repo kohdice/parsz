@@ -11,6 +11,8 @@ pub const ParseError = error{
     UnknownSubcommand,
     MissingSubcommand,
     HelpRequested,
+    ConflictingArgs,
+    MissingRequiredBy,
 };
 
 pub const FlagRef = union(enum) {
@@ -24,6 +26,7 @@ pub const Diagnostic = struct {
     flag: FlagRef = .none,
     provided_value: []const u8 = "",
     expected: []const u8 = "",
+    message: []const u8 = "",
 
     pub fn format(self: Diagnostic, writer: anytype) !void {
         var has_subject = false;
@@ -43,6 +46,15 @@ pub const Diagnostic = struct {
                     has_subject = true;
                 }
             },
+        }
+
+        if (self.message.len > 0) {
+            if (has_subject) {
+                try writer.print(": {s}", .{self.message});
+            } else {
+                try writer.writeAll(self.message);
+            }
+            return;
         }
 
         if (self.provided_value.len > 0) {
@@ -123,4 +135,25 @@ test "diagnostic: format expected only without subject" {
     var buf: [256]u8 = undefined;
     const result = try std.fmt.bufPrint(&buf, "{f}", .{diag});
     try std.testing.expectEqualStrings("(expected one of: run, build)", result);
+}
+
+test "diagnostic: format message with subject" {
+    const diag = Diagnostic{ .flag = .{ .long = "json" }, .message = "cannot be used with '--csv'" };
+    var buf: [256]u8 = undefined;
+    const result = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("argument '--json': cannot be used with '--csv'", result);
+}
+
+test "diagnostic: format message without subject" {
+    const diag = Diagnostic{ .message = "required unless '--stdin' is present" };
+    var buf: [256]u8 = undefined;
+    const result = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("required unless '--stdin' is present", result);
+}
+
+test "diagnostic: message takes precedence over provided_value" {
+    const diag = Diagnostic{ .flag = .{ .long = "json" }, .provided_value = "ignored", .message = "conflicts with '--csv'" };
+    var buf: [256]u8 = undefined;
+    const result = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("argument '--json': conflicts with '--csv'", result);
 }
