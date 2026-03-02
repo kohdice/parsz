@@ -1183,6 +1183,110 @@ test "parse: constraint diagnostic message" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "cannot be used with") != null);
 }
 
+test "parse: nested subcommand help rendering" {
+    const RemoteCli = struct { url: []const u8 };
+    const OuterCli = struct {
+        verbose: bool = false,
+        cmd: union(enum) { remote: RemoteCli },
+    };
+    var buf: [1024]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try help(OuterCli, .{
+        ._meta = .{ .name = "myapp" },
+        .verbose = .{ .short = 'v', .help = "Enable verbose output" },
+        .cmd = .{ .remote = .{ .url = .{ .positional = true } } },
+    }, stream.writer());
+    const output = stream.getWritten();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Usage: myapp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Commands:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "remote") != null);
+}
+
+test "parse: GNU permutation with short clustering" {
+    const Cli = struct {
+        a_flag: bool = false,
+        b_flag: bool = false,
+        file: []const u8,
+    };
+    // Positional first, then clustered short flags — GNU permutation reorders
+    const result = try parse(Cli, std.testing.allocator, &.{ "file.txt", "-ab" }, .{
+        .a_flag = .{ .short = 'a' },
+        .b_flag = .{ .short = 'b' },
+        .file = .{ .positional = true },
+    }, null);
+    try std.testing.expect(result.a_flag);
+    try std.testing.expect(result.b_flag);
+    try std.testing.expectEqualStrings("file.txt", result.file);
+}
+
+test "parse: end of options after option value" {
+    const Cli = struct {
+        output: []const u8 = "default",
+        file: []const u8,
+    };
+    // "--" after an option value causes remaining args to be treated as positionals
+    const result = try parse(Cli, std.testing.allocator, &.{ "--output", "result.txt", "--", "--not-a-flag" }, .{
+        .file = .{ .positional = true },
+    }, null);
+    try std.testing.expectEqualStrings("result.txt", result.output);
+    try std.testing.expectEqualStrings("--not-a-flag", result.file);
+}
+
+test "parse: conflicts_with multiple targets" {
+    const Cli = struct {
+        json: bool = false,
+        csv: bool = false,
+        xml: bool = false,
+    };
+    const config = .{ .json = .{ .conflicts_with = &.{ "csv", "xml" } } };
+
+    // json + xml → ConflictingArgs
+    {
+        var diag: Diagnostic = .{};
+        const result = parse(Cli, std.testing.allocator, &.{ "--json", "--xml" }, config, &diag);
+        try std.testing.expectError(error.ConflictingArgs, result);
+        try std.testing.expectEqualStrings("json", diag.arg_name);
+    }
+
+    // json alone → success
+    {
+        const result = try parse(Cli, std.testing.allocator, &.{"--json"}, config, null);
+        try std.testing.expect(result.json);
+    }
+}
+
+test "parse: constraint interaction conflicts_with and requires" {
+    const Cli = struct {
+        format: ?[]const u8 = null,
+        output: ?[]const u8 = null,
+        json: bool = false,
+    };
+    // engine.evaluate() iterates fields with inline for, checking
+    // conflicts_with before requires within each field (engine.zig:27-50).
+    const config = .{ .format = .{ .requires = &.{"output"}, .conflicts_with = &.{"json"} } };
+
+    // requires satisfied, no conflict → success
+    {
+        const result = try parse(Cli, std.testing.allocator, &.{ "--format", "csv", "--output", "file.txt" }, config, null);
+        try std.testing.expectEqualStrings("csv", result.format.?);
+        try std.testing.expectEqualStrings("file.txt", result.output.?);
+    }
+
+    // conflicts_with triggers before requires (json present → ConflictingArgs)
+    {
+        var diag: Diagnostic = .{};
+        const result = parse(Cli, std.testing.allocator, &.{ "--format", "csv", "--json" }, config, &diag);
+        try std.testing.expectError(error.ConflictingArgs, result);
+    }
+
+    // requires not satisfied (output missing → MissingRequiredBy)
+    {
+        var diag: Diagnostic = .{};
+        const result = parse(Cli, std.testing.allocator, &.{ "--format", "csv" }, config, &diag);
+        try std.testing.expectError(error.MissingRequiredBy, result);
+    }
+}
+
 test {
     _ = @import("parser.zig");
     _ = @import("tokenizer.zig");
