@@ -162,7 +162,8 @@ pub fn parseArgs(
     argv: []const [:0]const u8,
     comptime config: anytype,
 ) (ParseError || error{OutOfMemory})!T {
-    return parseCore(T, allocator, argv, config, null, null);
+    const cmd_spec = comptime @import("spec/command.zig").buildSpec(T, config);
+    return parseCore(T, allocator, argv, config, null, cmd_spec.subcommand_field);
 }
 
 pub fn parseCore(
@@ -1329,6 +1330,17 @@ test "parser: bool flag long short mixed duplicate returns DuplicateArg" {
         .verbose = .{ .short = 'v' },
     });
     try std.testing.expectError(error.DuplicateArg, result);
+}
+
+test "parser: parseArgs with subcommand" {
+    const Command = union(enum) {
+        run: struct { target: []const u8 = "default" },
+        build: struct {},
+    };
+    const T = struct { command: ?Command = null };
+    const result = try parseArgs(T, std.testing.allocator, &.{ "run", "--target", "release" }, .{});
+    try std.testing.expect(result.command != null);
+    try std.testing.expectEqualStrings("release", result.command.?.run.target);
 }
 
 pub fn hasBuiltinHelpShort(comptime T: type, comptime config: anytype) bool {
