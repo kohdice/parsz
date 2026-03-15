@@ -1177,6 +1177,38 @@ test "parse: required_unless_present not exempted" {
     try std.testing.expect(diag.message.len > 0);
 }
 
+test "parse: required_unless_present with non-null default does not require user input" {
+    const Cli = struct {
+        input: []const u8 = "default.txt",
+        stdin: bool = false,
+    };
+    const config = .{
+        .input = .{ .positional = true, .required_unless_present = &.{"stdin"} },
+    };
+    var result = try parse(Cli, std.testing.allocator, &.{}, config, null);
+    defer deinit(Cli, &result, std.testing.allocator, config);
+    try std.testing.expectEqualStrings("default.txt", result.input);
+}
+
+test "parse: required_unless_present target with default is not treated as user-provided" {
+    const Cli = struct {
+        input: ?[]const u8 = null,
+        stdin: bool = true,
+    };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{}, .{
+        .input = .{ .positional = true, .required_unless_present = &.{"stdin"} },
+    }, &diag);
+    try std.testing.expectError(error.MissingRequired, result);
+}
+
+test "parse: optional multi field without explicit default stays null when omitted" {
+    const Cli = struct { ports: ?[]const u16 };
+    var result = try parse(Cli, std.testing.allocator, &.{}, .{}, null);
+    defer deinit(Cli, &result, std.testing.allocator, .{});
+    try std.testing.expect(result.ports == null);
+}
+
 test "parse: constraint diagnostic message" {
     const Cli = struct {
         json: bool = false,

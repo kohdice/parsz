@@ -370,7 +370,17 @@ pub fn parseCore(
         inline for (fields) |field| {
             const fc = comptime getFieldConfig(config, field.name);
             if (comptime fc.required_unless_present.len > 0) {
-                if (!user_set.contains(@field(FieldEnum, field.name))) {
+                const has_meaningful_default = comptime blk: {
+                    if (field.default_value_ptr) |ptr| {
+                        if (@typeInfo(field.type) == .optional) {
+                            const default = @as(*const field.type, @ptrCast(@alignCast(ptr))).*;
+                            break :blk default != null;
+                        }
+                        break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!user_set.contains(@field(FieldEnum, field.name)) and !has_meaningful_default) {
                     if (!constraint_engine.checkRequiredUnlessPresent(T, config, user_set, field.name)) {
                         const kind = comptime argKind(field.type, fc);
                         if (diagnostic) |d| {
@@ -434,8 +444,17 @@ pub fn parseCore(
                     }
                 }
             } else {
-                @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
-                finalized_multi.insert(@field(FieldEnum, field.name));
+                if (comptime @typeInfo(field.type) == .optional) {
+                    if (@field(lists, field.name).items.len == 0) {
+                        @field(result, field.name) = null;
+                    } else {
+                        @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
+                        finalized_multi.insert(@field(FieldEnum, field.name));
+                    }
+                } else {
+                    @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
+                    finalized_multi.insert(@field(FieldEnum, field.name));
+                }
             }
         }
     }
