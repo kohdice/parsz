@@ -26,6 +26,7 @@ pub fn validate(comptime T: type, comptime config: anytype) void {
     checkPositionalOrdering(fields, config);
     checkCountPositionalConflict(fields, config);
     checkPositionalOptionConflict(fields, config);
+    checkBoolPositionalConflict(fields, config);
     checkConstraintTargetExists(fields, config);
     checkConstraintSelfReference(fields, config);
     checkConstraintSubcommandExclusion(fields, config);
@@ -267,6 +268,17 @@ fn checkPositionalOptionConflict(comptime fields: anytype, comptime config: anyt
     }
 }
 
+fn checkBoolPositionalConflict(comptime fields: anytype, comptime config: anytype) void {
+    comptime {
+        for (fields) |field| {
+            const fc = getFieldConfig(config, field.name);
+            if (fc.positional and field.type == bool) {
+                @compileError("field '" ++ field.name ++ "' has type bool and .positional = true; bool fields are always flags, not positional arguments");
+            }
+        }
+    }
+}
+
 fn checkConstraintTargetExists(comptime fields: anytype, comptime config: anytype) void {
     comptime {
         for (fields) |field| {
@@ -411,6 +423,40 @@ pub fn validateSubcommandConfig(
                     }
                     break;
                 }
+            }
+        }
+    }
+
+    // Phase B: validate all variant payloads unconditionally.
+    // Variants already validated in Phase A (with explicit config) are skipped.
+    comptime {
+        const Config = @TypeOf(config);
+        const config_info = @typeInfo(Config);
+        for (sub_fields) |sf| {
+            if (@typeInfo(sf.type) != .@"struct") continue;
+
+            // Check if this variant was already validated in Phase A.
+            const has_explicit_config = blk: {
+                if (config_info != .@"struct" or Config == @TypeOf(.{})) break :blk false;
+                for (config_info.@"struct".fields) |cf| {
+                    if (!std.mem.eql(u8, cf.name, subcmd_field_name)) continue;
+                    const subcmd_config = @field(config, subcmd_field_name);
+                    const SubConfig = @TypeOf(subcmd_config);
+                    const sub_config_info = @typeInfo(SubConfig);
+                    if (sub_config_info != .@"struct" or SubConfig == @TypeOf(.{})) break :blk false;
+                    for (sub_config_info.@"struct".fields) |vcf| {
+                        if (std.mem.eql(u8, vcf.name, sf.name)) break :blk true;
+                    }
+                    break :blk false;
+                }
+                break :blk false;
+            };
+            if (has_explicit_config) continue;
+
+            validate(sf.type, .{});
+            const inner_spec = @import("spec/command.zig").buildSpec(sf.type, .{});
+            if (inner_spec.subcommand_field) |inner_sfn| {
+                validateSubcommandConfig(sf.type, .{}, inner_sfn);
             }
         }
     }

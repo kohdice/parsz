@@ -48,6 +48,9 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/nested_subcmd_typo_help.zig", "unknown config key 'targt' does not match any field in nested_subcmd_typo_help.RemoteCli" },
         .{ "test/comptime/nested_subcmd_typo_usage.zig", "unknown config key 'targt' does not match any field in nested_subcmd_typo_usage.RemoteCli" },
         .{ "test/comptime/nested_subcmd_variant_int.zig", "invalid config value type for subcommand variant 'add': expected a struct, got comptime_int" },
+        .{ "test/comptime/bool_positional.zig", "bool fields are always flags, not positional arguments" },
+        .{ "test/comptime/unconfigured_variant_payload_help.zig", "untagged union; union fields must be tagged (union(enum))" },
+        .{ "test/comptime/unconfigured_variant_payload_usage.zig", "untagged union; union fields must be tagged (union(enum))" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
