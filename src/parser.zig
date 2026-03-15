@@ -332,7 +332,12 @@ pub fn parseCore(
     inline for (fields) |field| {
         const fc = comptime getFieldConfig(config, field.name);
         if (comptime argKind(field.type, fc) == .multi) {
-            field_set.insert(@field(FieldEnum, field.name));
+            if (user_set.contains(@field(FieldEnum, field.name)) or
+                field.default_value_ptr != null or
+                @typeInfo(field.type) == .optional)
+            {
+                field_set.insert(@field(FieldEnum, field.name));
+            }
         }
     }
 
@@ -552,6 +557,14 @@ pub fn handleLong(
     // Built-in help flag (only if no user field matched)
     if (comptime hasBuiltinHelpLong(T, config)) {
         if (std.mem.eql(u8, long.name, "help")) {
+            if (long.value != null) {
+                if (diagnostic) |d| d.* = .{
+                    .arg_name = "help",
+                    .flag = .{ .long = "help" },
+                    .provided_value = long.value.?,
+                };
+                return error.InvalidValue;
+            }
             return error.HelpRequested;
         }
     }
