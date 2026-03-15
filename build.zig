@@ -40,6 +40,14 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/constraint_self_reference.zig", "conflicts_with referencing itself" },
         .{ "test/comptime/constraint_on_subcommand.zig", "is a subcommand and cannot have constraints" },
         .{ "test/comptime/required_unless_no_default.zig", "non-optional with no default; use ?T or provide a default value" },
+        .{ "test/comptime/root_config_int.zig", "config must be a struct, got comptime_int" },
+        .{ "test/comptime/field_config_bool.zig", "invalid config value type for field 'verbose': expected FieldConfig or .{ .short = ... }, got bool" },
+        .{ "test/comptime/field_config_int.zig", "invalid config value type for field 'output': expected FieldConfig or .{ .short = ... }, got comptime_int" },
+        .{ "test/comptime/subcmd_config_int.zig", "invalid config value type for subcommand field 'command': expected a struct, got comptime_int" },
+        .{ "test/comptime/subcmd_variant_config_int.zig", "invalid config value type for subcommand variant 'run': expected a struct, got comptime_int" },
+        .{ "test/comptime/nested_subcmd_typo_help.zig", "unknown config key 'targt' does not match any field in nested_subcmd_typo_help.RemoteCli" },
+        .{ "test/comptime/nested_subcmd_typo_usage.zig", "unknown config key 'targt' does not match any field in nested_subcmd_typo_usage.RemoteCli" },
+        .{ "test/comptime/nested_subcmd_variant_int.zig", "invalid config value type for subcommand variant 'add': expected a struct, got comptime_int" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
