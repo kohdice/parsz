@@ -9,6 +9,10 @@ const MetaConfig = spec_arg.MetaConfig;
 const constraint = @import("spec/constraint.zig");
 
 pub fn validate(comptime T: type, comptime config: anytype) void {
+    const Config = @TypeOf(config);
+    if (@typeInfo(Config) != .@"struct") {
+        @compileError("config must be a struct, got " ++ @typeName(Config));
+    }
     const fields = @typeInfo(T).@"struct".fields;
 
     checkDuplicateShorts(fields, config);
@@ -169,7 +173,12 @@ fn checkUnknownFieldConfigKeys(comptime fields: anytype, comptime config: anytyp
                         const ValType = @TypeOf(val);
                         if (ValType == FieldConfig) break;
                         const val_info = @typeInfo(ValType);
-                        if (val_info != .@"struct") break;
+                        if (val_info != .@"struct") {
+                            @compileError(
+                                "invalid config value type for field '" ++ field.name ++
+                                    "': expected FieldConfig or .{ .short = ... }, got " ++ @typeName(ValType),
+                            );
+                        }
 
                         for (val_info.@"struct".fields) |vf| {
                             const is_known = blk: {
@@ -367,6 +376,23 @@ pub fn validateSubcommandConfig(
                             for (sub_fields) |sf| {
                                 if (std.mem.eql(u8, vcf.name, sf.name)) {
                                     found = true;
+                                    const variant_val = @field(subcmd_config, vcf.name);
+                                    const VariantValType = @TypeOf(variant_val);
+                                    if (@typeInfo(VariantValType) != .@"struct") {
+                                        @compileError(
+                                            "invalid config value type for subcommand variant '" ++ vcf.name ++
+                                                "': expected a struct, got " ++ @typeName(VariantValType),
+                                        );
+                                    }
+                                    // Recursive validation of variant payload
+                                    const PayloadType = sf.type;
+                                    if (@typeInfo(PayloadType) == .@"struct") {
+                                        validate(PayloadType, variant_val);
+                                        const inner_spec = @import("spec/command.zig").buildSpec(PayloadType, variant_val);
+                                        if (inner_spec.subcommand_field) |inner_sfn| {
+                                            validateSubcommandConfig(PayloadType, variant_val, inner_sfn);
+                                        }
+                                    }
                                     break;
                                 }
                             }
@@ -377,6 +403,11 @@ pub fn validateSubcommandConfig(
                                 );
                             }
                         }
+                    } else if (SubConfig != @TypeOf(.{})) {
+                        @compileError(
+                            "invalid config value type for subcommand field '" ++ subcmd_field_name ++
+                                "': expected a struct, got " ++ @typeName(SubConfig),
+                        );
                     }
                     break;
                 }
