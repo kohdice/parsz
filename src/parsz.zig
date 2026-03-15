@@ -998,10 +998,19 @@ test "parse: -h returns HelpRequested" {
     try std.testing.expectError(error.HelpRequested, result);
 }
 
-test "parse: --help=value returns HelpRequested" {
+test "parse: --help=value returns InvalidValue" {
     const Cli = struct { verbose: bool = false };
     const result = parse(Cli, std.testing.allocator, &.{"--help=anything"}, .{}, null);
-    try std.testing.expectError(error.HelpRequested, result);
+    try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parse: --help=value diagnostic" {
+    const Cli = struct { verbose: bool = false };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{"--help=foo"}, .{}, &diag);
+    try std.testing.expectError(error.InvalidValue, result);
+    try std.testing.expectEqualStrings("help", diag.arg_name);
+    try std.testing.expectEqualStrings("foo", diag.provided_value);
 }
 
 test "parse: -- --help does not trigger help" {
@@ -1285,6 +1294,36 @@ test "parse: constraint interaction conflicts_with and requires" {
         const result = parse(Cli, std.testing.allocator, &.{ "--format", "csv" }, config, &diag);
         try std.testing.expectError(error.MissingRequiredBy, result);
     }
+}
+
+test "parse: required multi positional zero values returns MissingRequired" {
+    const Cli = struct { files: []const []const u8 };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{}, .{
+        .files = .{ .positional = true },
+    }, &diag);
+    try std.testing.expectError(error.MissingRequired, result);
+    try std.testing.expectEqualStrings("files", diag.arg_name);
+}
+
+test "parse: required multi option zero values returns MissingRequired" {
+    const Cli = struct { ports: []const u16 };
+    var diag: Diagnostic = .{};
+    const result = parse(Cli, std.testing.allocator, &.{}, .{}, &diag);
+    try std.testing.expectError(error.MissingRequired, result);
+    try std.testing.expectEqualStrings("ports", diag.arg_name);
+}
+
+test "parse: defaulted multi field zero values returns empty slice" {
+    const Cli = struct { ports: []const u16 = &.{} };
+    const result = try parse(Cli, std.testing.allocator, &.{}, .{}, null);
+    try std.testing.expectEqual(@as(usize, 0), result.ports.len);
+}
+
+test "parse: optional multi field zero values returns null" {
+    const Cli = struct { ports: ?[]const u16 = null };
+    const result = try parse(Cli, std.testing.allocator, &.{}, .{}, null);
+    try std.testing.expect(result.ports == null);
 }
 
 test {
