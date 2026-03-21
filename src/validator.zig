@@ -396,8 +396,15 @@ pub fn validateSubcommandConfig(
                                                 "': expected a struct, got " ++ @typeName(VariantValType),
                                         );
                                     }
-                                    // Recursive validation of variant payload
+                                    // Reject non-struct payloads early
                                     const PayloadType = sf.type;
+                                    if (@typeInfo(PayloadType) != .@"struct") {
+                                        @compileError(
+                                            "subcommand variant '" ++ sf.name ++
+                                                "' payload must be a struct, got " ++ @typeName(PayloadType),
+                                        );
+                                    }
+                                    // Recursive validation of variant payload
                                     if (@typeInfo(PayloadType) == .@"struct") {
                                         validate(PayloadType, variant_val);
                                         const inner_spec = @import("spec/command.zig").buildSpec(PayloadType, variant_val);
@@ -433,7 +440,12 @@ pub fn validateSubcommandConfig(
         const Config = @TypeOf(config);
         const config_info = @typeInfo(Config);
         for (sub_fields) |sf| {
-            if (@typeInfo(sf.type) != .@"struct") continue;
+            if (@typeInfo(sf.type) != .@"struct") {
+                @compileError(
+                    "subcommand variant '" ++ sf.name ++
+                        "' payload must be a struct, got " ++ @typeName(sf.type),
+                );
+            }
 
             // Check if this variant was already validated in Phase A.
             const has_explicit_config = blk: {

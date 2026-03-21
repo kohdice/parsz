@@ -51,6 +51,7 @@ pub fn build(b: *std.Build) void {
         .{ "test/comptime/bool_positional.zig", "bool fields are always flags, not positional arguments" },
         .{ "test/comptime/unconfigured_variant_payload_help.zig", "untagged union; union fields must be tagged (union(enum))" },
         .{ "test/comptime/unconfigured_variant_payload_usage.zig", "untagged union; union fields must be tagged (union(enum))" },
+        .{ "test/comptime/non_struct_subcommand_payload.zig", "payload must be a struct, got u8" },
     }) |entry| {
         const ct = b.addObject(.{
             .name = "comptime-test",
