@@ -776,6 +776,77 @@ test "parse: deinit nested default subcommand with non-empty multi field" {
     }
 }
 
+test "parse: default subcommand with required field succeeds (field_set full)" {
+    const Run = struct {
+        target: []const u8 = "release",
+        force: bool = false,
+    };
+    const Command = union(enum) {
+        run: Run,
+    };
+    const Cli = struct {
+        command: ?Command = .{ .run = .{} },
+    };
+
+    // No subcommand parsed → default value is used.
+    // field_set is full so required check should pass even though user_set is empty.
+    var result = try parse(Cli, std.testing.allocator, &.{}, .{}, null);
+    defer deinit(Cli, &result, std.testing.allocator, .{});
+    try std.testing.expect(result.command != null);
+    try std.testing.expectEqualStrings("release", result.command.?.run.target);
+    try std.testing.expect(!result.command.?.run.force);
+}
+
+test "parse: default subcommand preserves field defaults" {
+    const Build = struct {
+        jobs: u8 = 4,
+        release: bool = false,
+    };
+    const Command = union(enum) {
+        build: Build,
+    };
+    const Cli = struct {
+        command: ?Command = .{ .build = .{} },
+    };
+
+    var result = try parse(Cli, std.testing.allocator, &.{}, .{}, null);
+    defer deinit(Cli, &result, std.testing.allocator, .{});
+    try std.testing.expect(result.command != null);
+    try std.testing.expectEqual(@as(u8, 4), result.command.?.build.jobs);
+    try std.testing.expect(!result.command.?.build.release);
+}
+
+test "parse: default subcommand multi field from union literal preserved" {
+    // The multi field has NO struct-level default (default_value_ptr is null).
+    // The value comes from the union literal initializer.
+    const Install = struct {
+        packages: []const []const u8,
+    };
+    const Command = union(enum) {
+        install: Install,
+    };
+    const Cli = struct {
+        command: ?Command = .{ .install = .{ .packages = &.{"from-literal"} } },
+    };
+    const config = .{
+        .command = .{
+            .install = .{
+                .packages = .{ .positional = true },
+            },
+        },
+    };
+
+    var result = try parse(Cli, std.testing.allocator, &.{}, config, null);
+    defer deinit(Cli, &result, std.testing.allocator, config);
+    try std.testing.expect(result.command != null);
+    switch (result.command.?) {
+        .install => |inst| {
+            try std.testing.expectEqual(@as(usize, 1), inst.packages.len);
+            try std.testing.expectEqualStrings("from-literal", inst.packages[0]);
+        },
+    }
+}
+
 test "parse: subcommand name takes precedence over positional" {
     const Command = union(enum) {
         run: struct {},
@@ -946,7 +1017,7 @@ test "parse: diagnostic on TooManyPositionals" {
     try std.testing.expectEqualStrings("extra", diag.provided_value);
     var buf: [256]u8 = undefined;
     const rendered = try std.fmt.bufPrint(&buf, "{f}", .{diag});
-    try std.testing.expectEqualStrings("invalid value 'extra'", rendered);
+    try std.testing.expectEqualStrings("unexpected positional argument 'extra'", rendered);
 }
 
 test "parse: diagnostic on UnknownSubcommand" {
@@ -958,7 +1029,7 @@ test "parse: diagnostic on UnknownSubcommand" {
     try std.testing.expectEqualStrings("bogus", diag.provided_value);
     var buf: [256]u8 = undefined;
     const rendered = try std.fmt.bufPrint(&buf, "{f}", .{diag});
-    try std.testing.expectEqualStrings("invalid value 'bogus'", rendered);
+    try std.testing.expectEqualStrings("unknown subcommand 'bogus'", rendered);
 }
 
 test "parse: diagnostic on MissingSubcommand" {
