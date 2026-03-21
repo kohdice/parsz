@@ -156,6 +156,216 @@ pub fn deinitMultiLists(comptime T: type, comptime config: anytype, lists: *Mult
     }
 }
 
+pub fn validateAndFinalize(
+    comptime T: type,
+    comptime config: anytype,
+    result: *T,
+    field_set: *std.EnumSet(std.meta.FieldEnum(T)),
+    user_set: *const std.EnumSet(std.meta.FieldEnum(T)),
+    lists: *MultiLists(T, config),
+    allocator: std.mem.Allocator,
+    diagnostic: ?*Diagnostic,
+    comptime subcmd_field_name: ?[]const u8,
+    subcmd_parsed: bool,
+    all_initialized: bool,
+) (ParseError || error{OutOfMemory})!void {
+    const fields = @typeInfo(T).@"struct".fields;
+    const FieldEnum = std.meta.FieldEnum(T);
+
+    // 7. Mark multi fields as set
+    inline for (fields) |field| {
+        const fc = comptime getFieldConfig(config, field.name);
+        if (comptime argKind(field.type, fc) == .multi) {
+            if (user_set.*.contains(@field(FieldEnum, field.name)) or
+                field.default_value_ptr != null or
+                @typeInfo(field.type) == .optional)
+            {
+                field_set.insert(@field(FieldEnum, field.name));
+            }
+        }
+    }
+
+    // 8. Required field check
+    inline for (fields) |field| {
+        if (!field_set.contains(@field(FieldEnum, field.name))) {
+            const fc = comptime getFieldConfig(config, field.name);
+            const kind = comptime argKind(field.type, fc);
+            if (kind == .subcommand and @typeInfo(field.type) == .optional) {
+                @field(result, field.name) = null;
+            } else if (kind == .subcommand) {
+                if (diagnostic) |d| d.* = .{ .arg_name = field.name };
+                return error.MissingSubcommand;
+            } else {
+                if (diagnostic) |d| d.* = .{
+                    .arg_name = field.name,
+                    .flag = if (comptime kind == .positional or (kind == .multi and fc.positional))
+                        .none
+                    else
+                        .{ .long = comptime longName(field.name, fc) },
+                };
+                return error.MissingRequired;
+            }
+        }
+    }
+
+    // 8.25 required_unless_present check (user_set-based)
+    // Skipped for default subcommands (all_initialized): all values are developer-provided,
+    // so user-facing constraints do not apply.
+    if (!all_initialized) {
+        const constraint_engine = @import("constraint/engine.zig");
+        inline for (fields) |field| {
+            const fc = comptime getFieldConfig(config, field.name);
+            if (comptime fc.required_unless_present.len > 0) {
+                const has_meaningful_default = comptime blk: {
+                    if (field.default_value_ptr) |ptr| {
+                        if (@typeInfo(field.type) == .optional) {
+                            const default = @as(*const field.type, @ptrCast(@alignCast(ptr))).*;
+                            break :blk default != null;
+                        }
+                        break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!user_set.*.contains(@field(FieldEnum, field.name)) and !has_meaningful_default) {
+                    if (!constraint_engine.checkRequiredUnlessPresent(T, config, user_set.*, field.name)) {
+                        const kind = comptime argKind(field.type, fc);
+                        if (diagnostic) |d| {
+                            const spec_constraint = @import("spec/constraint.zig");
+                            d.* = .{
+                                .arg_name = field.name,
+                                .flag = if (comptime kind == .positional or (kind == .multi and fc.positional))
+                                    .none
+                                else
+                                    .{ .long = comptime longName(field.name, fc) },
+                                .message = comptime spec_constraint.requiredUnlessMessage(config, fc.required_unless_present),
+                            };
+                        }
+                        return error.MissingRequired;
+                    }
+                }
+            }
+        }
+    }
+
+    // 8.5 Constraint evaluation (conflicts_with, requires)
+    // Also skipped for default subcommands: no user-provided args to conflict.
+    if (!all_initialized) {
+        const constraint_engine = @import("constraint/engine.zig");
+        try constraint_engine.evaluate(T, config, user_set.*, diagnostic);
+    }
+
+    // 9. Multi field finalization + errdefer
+    var finalized_multi = std.EnumSet(FieldEnum).initEmpty();
+    errdefer {
+        inline for (fields) |field| {
+            const fc = comptime getFieldConfig(config, field.name);
+            if (comptime argKind(field.type, fc) == .multi) {
+                if (finalized_multi.contains(@field(FieldEnum, field.name))) {
+                    if (comptime @typeInfo(field.type) == .optional) {
+                        if (@field(result, field.name)) |s| allocator.free(s);
+                    } else {
+                        allocator.free(@field(result, field.name));
+                    }
+                }
+            }
+        }
+    }
+
+    inline for (fields) |field| {
+        const fc = comptime getFieldConfig(config, field.name);
+        if (comptime argKind(field.type, fc) == .multi) {
+            const Child = comptime sliceChild(field.type);
+            if (@field(lists.*, field.name).items.len == 0) {
+                // No values parsed — preserve existing value (from field default or union literal)
+                if (comptime @typeInfo(field.type) == .optional) {
+                    if (@field(result, field.name)) |existing| {
+                        if (existing.len > 0) {
+                            @field(result, field.name) = try allocator.dupe(Child, existing);
+                            finalized_multi.insert(@field(FieldEnum, field.name));
+                        }
+                    }
+                } else {
+                    const existing = @field(result, field.name);
+                    if (existing.len > 0) {
+                        @field(result, field.name) = try allocator.dupe(Child, existing);
+                        finalized_multi.insert(@field(FieldEnum, field.name));
+                    }
+                }
+            } else {
+                // Values were parsed — use accumulated list
+                @field(result, field.name) = try @field(lists.*, field.name).toOwnedSlice(allocator);
+                finalized_multi.insert(@field(FieldEnum, field.name));
+            }
+        }
+    }
+
+    // 10. Subcommand validation for default (unparsed) subcommands
+    if (comptime subcmd_field_name != null) {
+        const subcmd_field = comptime for (fields) |f| {
+            if (std.mem.eql(u8, f.name, subcmd_field_name.?)) break f;
+        } else unreachable;
+        const SubUnion = comptime unwrapOptional(subcmd_field.type);
+
+        if (!subcmd_parsed) {
+            if (comptime @typeInfo(subcmd_field.type) == .optional) {
+                if (@field(result, subcmd_field_name.?)) |*sub| {
+                    try validateDefaultSubcommand(SubUnion, sub, allocator, config, subcmd_field_name.?, diagnostic);
+                    @field(result, subcmd_field_name.?) = sub.*;
+                }
+            } else {
+                try validateDefaultSubcommand(SubUnion, &@field(result, subcmd_field_name.?), allocator, config, subcmd_field_name.?, diagnostic);
+            }
+        }
+    }
+}
+
+fn validateDefaultSubcommand(
+    comptime SubUnion: type,
+    sub: *SubUnion,
+    allocator: std.mem.Allocator,
+    comptime config: anytype,
+    comptime subcmd_field_name: []const u8,
+    diagnostic: ?*Diagnostic,
+) (ParseError || error{OutOfMemory})!void {
+    const spec_command = @import("spec/command.zig");
+    const sub_ufields = @typeInfo(SubUnion).@"union".fields;
+    inline for (sub_ufields) |sf| {
+        if (sub.* == @field(std.meta.FieldEnum(SubUnion), sf.name)) {
+            const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
+            var payload = @field(sub, sf.name);
+
+            // field_set: ALL fields marked as set (payload is fully initialized from union default)
+            var sub_field_set = std.EnumSet(std.meta.FieldEnum(sf.type)).initFull();
+            // user_set: empty (nothing was explicitly provided by user)
+            const sub_user_set = std.EnumSet(std.meta.FieldEnum(sf.type)).initEmpty();
+            // lists: empty (no multi-value accumulation happened)
+            var sub_lists = initMultiLists(sf.type, sub_config);
+            defer deinitMultiLists(sf.type, sub_config, &sub_lists, allocator);
+
+            const inner_subcmd_field = comptime blk: {
+                const inner_spec = spec_command.buildSpec(sf.type, sub_config);
+                break :blk inner_spec.subcommand_field;
+            };
+
+            try validateAndFinalize(
+                sf.type,
+                sub_config,
+                &payload,
+                &sub_field_set,
+                &sub_user_set,
+                &sub_lists,
+                allocator,
+                diagnostic,
+                inner_subcmd_field,
+                false,
+                true,
+            );
+
+            sub.* = @unionInit(SubUnion, sf.name, payload);
+        }
+    }
+}
+
 pub fn parseArgs(
     comptime T: type,
     allocator: std.mem.Allocator,
@@ -292,10 +502,10 @@ pub fn parseCore(
                         if (!try handlePositional(T, config, &result, &field_set, &user_set, &lists, &positional_index, val, allocator, diagnostic)) {
                             const sub_fields_2 = @typeInfo(SubUnion).@"union".fields;
                             if (sub_fields_2.len > 0 and !subcmd_parsed and !tokenizer.options_ended) {
-                                if (diagnostic) |d| d.* = .{ .provided_value = val };
+                                if (diagnostic) |d| d.* = .{ .provided_value = val, .message = "unknown subcommand" };
                                 return error.UnknownSubcommand;
                             } else {
-                                if (diagnostic) |d| d.* = .{ .provided_value = val };
+                                if (diagnostic) |d| d.* = .{ .provided_value = val, .message = "unexpected positional argument" };
                                 return error.TooManyPositionals;
                             }
                         }
@@ -323,158 +533,14 @@ pub fn parseCore(
     if (comptime subcmd_field_name == null) {
         for (deferred_positionals.items) |pos_val| {
             if (!try handlePositional(T, config, &result, &field_set, &user_set, &lists, &positional_index, pos_val, allocator, diagnostic)) {
-                if (diagnostic) |d| d.* = .{ .provided_value = pos_val };
+                if (diagnostic) |d| d.* = .{ .provided_value = pos_val, .message = "unexpected positional argument" };
                 return error.TooManyPositionals;
             }
         }
     }
 
-    // 7. Mark multi fields as set (shared)
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        if (comptime argKind(field.type, fc) == .multi) {
-            if (user_set.contains(@field(FieldEnum, field.name)) or
-                field.default_value_ptr != null or
-                @typeInfo(field.type) == .optional)
-            {
-                field_set.insert(@field(FieldEnum, field.name));
-            }
-        }
-    }
-
-    // 8. Required field check (shared)
-    inline for (fields) |field| {
-        if (!field_set.contains(@field(FieldEnum, field.name))) {
-            const fc = comptime getFieldConfig(config, field.name);
-            const kind = comptime argKind(field.type, fc);
-            if (kind == .subcommand and @typeInfo(field.type) == .optional) {
-                @field(result, field.name) = null;
-            } else if (kind == .subcommand) {
-                if (diagnostic) |d| d.* = .{ .arg_name = field.name };
-                return error.MissingSubcommand;
-            } else {
-                if (diagnostic) |d| d.* = .{
-                    .arg_name = field.name,
-                    .flag = if (comptime kind == .positional or (kind == .multi and fc.positional))
-                        .none
-                    else
-                        .{ .long = comptime longName(field.name, fc) },
-                };
-                return error.MissingRequired;
-            }
-        }
-    }
-
-    // 8.25 required_unless_present check (user_set-based)
-    {
-        const constraint_engine = @import("constraint/engine.zig");
-        inline for (fields) |field| {
-            const fc = comptime getFieldConfig(config, field.name);
-            if (comptime fc.required_unless_present.len > 0) {
-                const has_meaningful_default = comptime blk: {
-                    if (field.default_value_ptr) |ptr| {
-                        if (@typeInfo(field.type) == .optional) {
-                            const default = @as(*const field.type, @ptrCast(@alignCast(ptr))).*;
-                            break :blk default != null;
-                        }
-                        break :blk true;
-                    }
-                    break :blk false;
-                };
-                if (!user_set.contains(@field(FieldEnum, field.name)) and !has_meaningful_default) {
-                    if (!constraint_engine.checkRequiredUnlessPresent(T, config, user_set, field.name)) {
-                        const kind = comptime argKind(field.type, fc);
-                        if (diagnostic) |d| {
-                            const spec_constraint = @import("spec/constraint.zig");
-                            d.* = .{
-                                .arg_name = field.name,
-                                .flag = if (comptime kind == .positional or (kind == .multi and fc.positional))
-                                    .none
-                                else
-                                    .{ .long = comptime longName(field.name, fc) },
-                                .message = comptime spec_constraint.requiredUnlessMessage(config, fc.required_unless_present),
-                            };
-                        }
-                        return error.MissingRequired;
-                    }
-                }
-            }
-        }
-    }
-
-    // 8.5 Constraint evaluation (conflicts_with, requires)
-    {
-        const constraint_engine = @import("constraint/engine.zig");
-        try constraint_engine.evaluate(T, config, user_set, diagnostic);
-    }
-
-    // 9. Multi field finalization + errdefer (shared)
-    var finalized_multi = std.EnumSet(FieldEnum).initEmpty();
-    errdefer {
-        inline for (fields) |field| {
-            const fc = comptime getFieldConfig(config, field.name);
-            if (comptime argKind(field.type, fc) == .multi) {
-                if (finalized_multi.contains(@field(FieldEnum, field.name))) {
-                    if (comptime @typeInfo(field.type) == .optional) {
-                        if (@field(result, field.name)) |s| allocator.free(s);
-                    } else {
-                        allocator.free(@field(result, field.name));
-                    }
-                }
-            }
-        }
-    }
-
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        if (comptime argKind(field.type, fc) == .multi) {
-            if (@field(lists, field.name).items.len == 0 and field.default_value_ptr != null) {
-                const Child = comptime sliceChild(field.type);
-                if (comptime @typeInfo(field.type) == .optional) {
-                    if (@field(result, field.name)) |default_slice| {
-                        if (default_slice.len > 0) {
-                            @field(result, field.name) = try allocator.dupe(Child, default_slice);
-                            finalized_multi.insert(@field(FieldEnum, field.name));
-                        }
-                    }
-                } else {
-                    const default_slice = @field(result, field.name);
-                    if (default_slice.len > 0) {
-                        @field(result, field.name) = try allocator.dupe(Child, default_slice);
-                        finalized_multi.insert(@field(FieldEnum, field.name));
-                    }
-                }
-            } else {
-                if (comptime @typeInfo(field.type) == .optional) {
-                    if (@field(lists, field.name).items.len == 0) {
-                        @field(result, field.name) = null;
-                    } else {
-                        @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
-                        finalized_multi.insert(@field(FieldEnum, field.name));
-                    }
-                } else {
-                    @field(result, field.name) = try @field(lists, field.name).toOwnedSlice(allocator);
-                    finalized_multi.insert(@field(FieldEnum, field.name));
-                }
-            }
-        }
-    }
-
-    // 10. Subcommand multi-default normalization (comptime guarded)
-    if (comptime subcmd_field_name != null) {
-        const SubUnion = comptime SubUnionInfo.SubUnion;
-        const subcmd_field = comptime SubUnionInfo.field;
-        if (!subcmd_parsed) {
-            if (comptime @typeInfo(subcmd_field.type) == .optional) {
-                if (@field(result, subcmd_field_name.?)) |*sub| {
-                    try normalizeSubcommandMultiDefaults(SubUnion, sub, allocator, config, subcmd_field_name.?);
-                    @field(result, subcmd_field_name.?) = sub.*;
-                }
-            } else if (comptime subcmd_field.default_value_ptr != null) {
-                try normalizeSubcommandMultiDefaults(SubUnion, &@field(result, subcmd_field_name.?), allocator, config, subcmd_field_name.?);
-            }
-        }
-    }
+    // 7-10. Validate, finalize multi fields, and validate default subcommands
+    try validateAndFinalize(T, config, &result, &field_set, &user_set, &lists, allocator, diagnostic, subcmd_field_name, subcmd_parsed, false);
 
     return result;
 }
@@ -539,6 +605,7 @@ pub fn handleLong(
                     if (diagnostic) |d| d.* = .{
                         .arg_name = field.name,
                         .flag = .{ .long = comptime longName(field.name, fc) },
+                        .message = "missing value",
                         .expected = @typeName(comptime unwrapOptional(field.type)),
                     };
                     return error.MissingValue;
@@ -619,6 +686,16 @@ pub fn handleShort(
         if (comptime fc.short) |s| {
             if (s == ch) {
                 if (kind == .flag) {
+                    // Reject -v=value (consistent with --verbose=value)
+                    if (tokenizer.short_remaining.len > 0 and tokenizer.short_remaining[0] == '=') {
+                        if (diagnostic) |d| d.* = .{
+                            .arg_name = field.name,
+                            .flag = .{ .short = s },
+                            .provided_value = tokenizer.short_remaining[1..],
+                        };
+                        tokenizer.short_remaining = "";
+                        return error.InvalidValue;
+                    }
                     if (comptime fc.action == .count) {
                         if (field_set.contains(@field(FieldEnum, field.name))) {
                             @field(result, field.name) +|= 1;
@@ -652,6 +729,7 @@ pub fn handleShort(
                         if (diagnostic) |d| d.* = .{
                             .arg_name = field.name,
                             .flag = .{ .short = s },
+                            .message = "missing value",
                             .expected = @typeName(comptime unwrapOptional(field.type)),
                         };
                         return error.MissingValue;
@@ -690,6 +768,16 @@ pub fn handleShort(
     // Built-in help flag (only if no user field matched)
     if (comptime hasBuiltinHelpShort(T, config)) {
         if (ch == 'h') {
+            // Reject -h=value (consistent with --help=value)
+            if (tokenizer.short_remaining.len > 0 and tokenizer.short_remaining[0] == '=') {
+                if (diagnostic) |d| d.* = .{
+                    .arg_name = "help",
+                    .flag = .{ .short = 'h' },
+                    .provided_value = tokenizer.short_remaining[1..],
+                };
+                tokenizer.short_remaining = "";
+                return error.InvalidValue;
+            }
             return error.HelpRequested;
         }
     }
@@ -845,95 +933,6 @@ fn SubVariantConfigType(comptime config: anytype, comptime subcmd_field_name: []
     return @TypeOf(.{});
 }
 
-pub fn normalizeMultiDefaults(
-    comptime T: type,
-    result: *T,
-    allocator: std.mem.Allocator,
-    comptime config: anytype,
-) error{OutOfMemory}!void {
-    const fields = @typeInfo(T).@"struct".fields;
-    const FieldEnum = std.meta.FieldEnum(T);
-
-    var normalized = std.EnumSet(FieldEnum).initEmpty();
-    errdefer {
-        inline for (fields) |field| {
-            const fc = comptime getFieldConfig(config, field.name);
-            const kind = comptime argKind(field.type, fc);
-            if (kind == .multi) {
-                if (normalized.contains(@field(FieldEnum, field.name))) {
-                    if (comptime @typeInfo(field.type) == .optional) {
-                        if (@field(result, field.name)) |s| allocator.free(s);
-                    } else {
-                        allocator.free(@field(result, field.name));
-                    }
-                }
-            } else if (kind == .subcommand) {
-                if (normalized.contains(@field(FieldEnum, field.name))) {
-                    const SubType = comptime unwrapOptional(field.type);
-                    if (@typeInfo(field.type) == .optional) {
-                        if (@field(result, field.name)) |*sub| {
-                            deinitSubcommand(SubType, sub, allocator, config, field.name);
-                        }
-                    } else {
-                        deinitSubcommand(SubType, &@field(result, field.name), allocator, config, field.name);
-                    }
-                }
-            }
-        }
-    }
-
-    inline for (fields) |field| {
-        const fc = comptime getFieldConfig(config, field.name);
-        const kind = comptime argKind(field.type, fc);
-        if (kind == .multi) {
-            const Child = comptime sliceChild(field.type);
-            if (comptime @typeInfo(field.type) == .optional) {
-                if (@field(result, field.name)) |slice| {
-                    if (slice.len > 0) {
-                        @field(result, field.name) = try allocator.dupe(Child, slice);
-                        normalized.insert(@field(FieldEnum, field.name));
-                    }
-                }
-            } else {
-                const slice = @field(result, field.name);
-                if (slice.len > 0) {
-                    @field(result, field.name) = try allocator.dupe(Child, slice);
-                    normalized.insert(@field(FieldEnum, field.name));
-                }
-            }
-        } else if (kind == .subcommand) {
-            const SubType = comptime unwrapOptional(field.type);
-            if (@typeInfo(field.type) == .optional) {
-                if (@field(result, field.name)) |*sub| {
-                    try normalizeSubcommandMultiDefaults(SubType, sub, allocator, config, field.name);
-                    normalized.insert(@field(FieldEnum, field.name));
-                }
-            } else {
-                try normalizeSubcommandMultiDefaults(SubType, &@field(result, field.name), allocator, config, field.name);
-                normalized.insert(@field(FieldEnum, field.name));
-            }
-        }
-    }
-}
-
-pub fn normalizeSubcommandMultiDefaults(
-    comptime SubUnion: type,
-    sub: *SubUnion,
-    allocator: std.mem.Allocator,
-    comptime config: anytype,
-    comptime subcmd_field_name: []const u8,
-) error{OutOfMemory}!void {
-    const sub_ufields = @typeInfo(SubUnion).@"union".fields;
-    inline for (sub_ufields) |sf| {
-        if (sub.* == @field(std.meta.FieldEnum(SubUnion), sf.name)) {
-            const sub_config = comptime getSubVariantConfig(config, subcmd_field_name, sf.name);
-            var payload = @field(sub, sf.name);
-            try normalizeMultiDefaults(sf.type, &payload, allocator, sub_config);
-            sub.* = @unionInit(SubUnion, sf.name, payload);
-        }
-    }
-}
-
 test "parser: bool flag with long" {
     const T = struct { verbose: bool = false };
     const result = try parseArgs(T, std.testing.allocator, &.{"--verbose"}, .{});
@@ -1068,6 +1067,15 @@ test "parser: short with inline value" {
     try std.testing.expectEqualStrings("file.txt", result.output);
 }
 
+test "parser: short option with equals in inline value (GNU compat)" {
+    const T = struct { output: []const u8 = "default" };
+    const result = try parseArgs(T, std.testing.allocator, &.{"-o=file.txt"}, .{
+        .output = .{ .short = 'o' },
+    });
+    // GNU-compatible: '=' is part of the value for short options
+    try std.testing.expectEqualStrings("=file.txt", result.output);
+}
+
 test "parser: end of options" {
     const T = struct {
         verbose: bool = false,
@@ -1198,6 +1206,50 @@ test "parser: optional multi field empty" {
     defer deinitResult(T, &result, std.testing.allocator, .{});
     // Default null is preserved when no values are specified.
     try std.testing.expect(result.ports == null);
+}
+
+test "parser: short flag rejects equals value" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"-v=false"}, .{
+        .verbose = .{ .short = 'v' },
+    });
+    try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parser: short flag rejects empty equals value" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"-v="}, .{
+        .verbose = .{ .short = 'v' },
+    });
+    try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parser: short help rejects equals value" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"-h=foo"}, .{});
+    try std.testing.expectError(error.InvalidValue, result);
+}
+
+test "parser: short clustering vh works" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"-vh"}, .{
+        .verbose = .{ .short = 'v' },
+    });
+    try std.testing.expectError(error.HelpRequested, result);
+}
+
+test "parser: short clustering hv returns HelpRequested" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"-hv"}, .{
+        .verbose = .{ .short = 'v' },
+    });
+    try std.testing.expectError(error.HelpRequested, result);
+}
+
+test "parser: short clustering hfoo returns HelpRequested" {
+    const T = struct { verbose: bool = false };
+    const result = parseArgs(T, std.testing.allocator, &.{"-hfoo"}, .{});
+    try std.testing.expectError(error.HelpRequested, result);
 }
 
 test "parser: bool flag rejects inline value" {
