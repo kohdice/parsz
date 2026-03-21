@@ -49,10 +49,13 @@ pub const Diagnostic = struct {
         }
 
         if (self.message.len > 0) {
-            if (has_subject) {
-                try writer.print(": {s}", .{self.message});
-            } else {
-                try writer.writeAll(self.message);
+            if (has_subject) try writer.writeAll(": ");
+            try writer.writeAll(self.message);
+            if (self.provided_value.len > 0) {
+                try writer.print(" '{s}'", .{self.provided_value});
+            }
+            if (self.expected.len > 0) {
+                try writer.print(" (expected {s})", .{self.expected});
             }
             return;
         }
@@ -151,9 +154,23 @@ test "diagnostic: format message without subject" {
     try std.testing.expectEqualStrings("required unless '--stdin' is present", result);
 }
 
-test "diagnostic: message takes precedence over provided_value" {
-    const diag = Diagnostic{ .flag = .{ .long = "json" }, .provided_value = "ignored", .message = "conflicts with '--csv'" };
+test "diagnostic: message with provided_value" {
+    const diag = Diagnostic{ .flag = .{ .long = "cmd" }, .provided_value = "foo", .message = "unknown subcommand" };
     var buf: [256]u8 = undefined;
     const result = try std.fmt.bufPrint(&buf, "{f}", .{diag});
-    try std.testing.expectEqualStrings("argument '--json': conflicts with '--csv'", result);
+    try std.testing.expectEqualStrings("argument '--cmd': unknown subcommand 'foo'", result);
+}
+
+test "diagnostic: message with expected" {
+    const diag = Diagnostic{ .flag = .{ .long = "output" }, .message = "missing value", .expected = "[]const u8" };
+    var buf: [256]u8 = undefined;
+    const result = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("argument '--output': missing value (expected []const u8)", result);
+}
+
+test "diagnostic: message with provided_value and expected" {
+    const diag = Diagnostic{ .flag = .{ .short = 'o' }, .provided_value = "bar", .message = "invalid option", .expected = "u16" };
+    var buf: [256]u8 = undefined;
+    const result = try std.fmt.bufPrint(&buf, "{f}", .{diag});
+    try std.testing.expectEqualStrings("argument '-o': invalid option 'bar' (expected u16)", result);
 }
