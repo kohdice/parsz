@@ -84,7 +84,8 @@ Options:
 - Count action (`.action = .count`)
 - Subcommands (nested, required, optional) via `union(enum)`
 - String, integer, float, bool-from-string, enum value types
-- GNU-style permutation, `--` end-of-options, short clustering, inline values
+- GNU-style permutation, `--` end-of-options, short clustering, inline values (`--opt=val`, `-oval`)
+  - **Note:** For short options, `-o=val` stores `=val` as the value (the `=` is part of the value). This matches GNU getopt behavior. Use `-oval` or `-o val` instead.
 - Auto help (`-h`/`--help`) with usage string generation
 - Per-arg help text and value names
 - `conflicts_with`, `requires`, `required_unless_present` constraints
