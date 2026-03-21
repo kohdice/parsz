@@ -4,32 +4,42 @@ This file provides guidance to AI agents and agentic coding tools when working w
 
 ## Project Overview
 
-parsz is a command-line argument parser library using only the Zig standard library.
+parsz is a command-line argument parser for Zig.
 
 - Zig version: 0.15.2 (`minimum_zig_version` in build.zig.zon)
 - No external dependencies — Zig standard library only
-- GNU-style argument parsing by default (supports option/operand permutation and `--` end-of-options).
-- Not strict POSIX-only parsing. Reference: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
+- Declarative CLI definitions
+- Comptime-validated schemas
+- GNU-style CLI parser with POSIX-inspired core rules
 
 ## Build Commands
 
 ```bash
-zig build test            # Run library tests (src/parsz.zig + compile-time validation tests)
+zig build test            # Run library tests
+zig fmt .                 # Run Formatter
 zig fmt --check .         # Format check (CI runs this)
 ```
 
-Run a single test by name filter:
+## Coding Style & Naming Conventions
 
-```bash
-zig build test -- --test-filter "integration: basic flag"
-```
+- Adhere to Zig's official coding style.
+- Keep public APIs declarative and standard-library-only, matching the current project direction.
+- Add comments only when behavior is not obvious from the code.
+- Non-breaking changes are acceptable until the version reaches 1.0.0. Prioritize modifying the implementation to match the recommended approach. Backward compatibility can be disregarded at this stage.
 
-Nix development shell (`flake.nix`) provides the pinned Zig toolchain:
+## Testing Guidelines
 
-```bash
-nix develop              # Enter dev shell with correct Zig version
-nix develop -c zig build test  # Run without entering shell
-```
+- Write Zig inline tests with descriptive names such as `test "parses short option clusters"`.
+- Add tests in the same PR that changes behavior, especially for parser validation and diagnostics.
+- Keep small fixtures close to the code under test until dedicated helpers are introduced.
+- Run `zig build test` before pushing. CI also checks formatting and runs tests on Ubuntu and macOS.
+
+## Commit & Pull Request Guidelines
+
+- Follow the Git Commit Guidelines in [CONTRIBUTING.md](./CONTRIBUTING.md).
+- Use short, meaningful scopes such as `parser`, `validator`, `build`, `readme`, or `parsz`.
+- PRs should explain the behavior change, link related issues, and include sample CLI input/output when diagnostics or parsing behavior changes.
+- Update `README.md` or planning docs when public behavior, constraints, or roadmap assumptions change.
 
 ## Role
 
