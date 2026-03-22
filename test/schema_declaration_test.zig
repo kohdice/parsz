@@ -75,9 +75,10 @@ test "Subcommand wrapper accepts tagged union command schemas" {
 
     const command_field = @typeInfo(Cli).@"struct".fields[0].type;
     const ParsedCli = parsz.Parsed(Cli);
+    const parsed_fields = @typeInfo(ParsedCli).@"struct".fields;
 
     try std.testing.expect(command_field.parsz_kind == .subcommand);
     try std.testing.expect(command_field.ParsedValue == Command);
-    try std.testing.expect(@hasDecl(ParsedCli, "parsz_schema"));
-    try std.testing.expect(ParsedCli.parsz_schema == Cli);
+    try std.testing.expectEqual(@as(usize, 1), parsed_fields.len);
+    try std.testing.expectEqualStrings("command", parsed_fields[0].name);
 }
