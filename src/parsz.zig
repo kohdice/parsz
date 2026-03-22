@@ -1,9 +1,19 @@
-const std = @import("std");
+const field = @import("field.zig");
+const parsed = @import("parsed.zig");
+const parse_impl = @import("parse.zig");
+const deinit_impl = @import("deinit.zig");
+const parse_error = @import("error.zig");
 
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+pub const FieldKind = field.FieldKind;
+pub const FieldMeta = field.FieldMeta;
 
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
-}
+pub const Flag = field.Flag;
+pub const Option = field.Option;
+pub const Positional = field.Positional;
+pub const Subcommand = field.Subcommand;
+
+pub const Parsed = parsed.Parsed;
+pub const ParseError = parse_error.ParseError;
+
+pub const parse = parse_impl.parse;
+pub const deinit = deinit_impl.deinit;
