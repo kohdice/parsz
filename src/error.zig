@@ -1,3 +1,9 @@
 pub const ParseError = error{
-    NotImplemented,
+    UnknownOption,
+    MissingOptionValue,
+    MissingRequiredOption,
+    MissingRequiredPositional,
+    UnexpectedArgument,
+    DuplicateOption,
+    InvalidValue,
 };
