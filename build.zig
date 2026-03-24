@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
     const external_tests = [_][]const u8{
         "test/schema_declaration_test.zig",
         "test/parsed_type_test.zig",
+        "test/parse_runtime_test.zig",
     };
 
     for (external_tests) |path| {
