@@ -21,17 +21,22 @@ test "Parsed transforms schema wrappers into plain struct fields" {
 }
 
 test "Parsed preserves repeated positional slice payloads" {
-    const Cli = struct {
+    const StringCli = struct {
         paths: parsz.Positional([]const []const u8, .{}),
+    };
+    const NumericCli = struct {
         ids: parsz.Positional([]const u32, .{}),
     };
 
-    const ParsedCli = parsz.Parsed(Cli);
-    const info = @typeInfo(ParsedCli).@"struct";
+    const ParsedStringCli = parsz.Parsed(StringCli);
+    const ParsedNumericCli = parsz.Parsed(NumericCli);
+    const string_info = @typeInfo(ParsedStringCli).@"struct";
+    const numeric_info = @typeInfo(ParsedNumericCli).@"struct";
 
-    try std.testing.expectEqual(@as(usize, 2), info.fields.len);
-    try std.testing.expect(info.fields[0].type == []const []const u8);
-    try std.testing.expect(info.fields[1].type == []const u32);
+    try std.testing.expectEqual(@as(usize, 1), string_info.fields.len);
+    try std.testing.expect(string_info.fields[0].type == []const []const u8);
+    try std.testing.expectEqual(@as(usize, 1), numeric_info.fields.len);
+    try std.testing.expect(numeric_info.fields[0].type == []const u32);
 }
 
 test "Parsed transforms subcommand unions recursively" {

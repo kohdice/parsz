@@ -1,8 +1,10 @@
 const std = @import("std");
+const schema = @import("schema.zig");
 
 const Type = std.builtin.Type;
 
 pub fn Parsed(comptime SchemaType: type) type {
+    _ = schema.getCommandSchema(SchemaType);
     return parsedCommandType(SchemaType);
 }
 
