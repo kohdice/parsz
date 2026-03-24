@@ -72,6 +72,8 @@ fn buildCommandSchema(
     comptime role: CommandRole,
     comptime path: []const u8,
 ) CommandSchema {
+    @setEvalBranchQuota(50_000);
+
     const command_info = switch (@typeInfo(SchemaType)) {
         .@"struct" => |info| info,
         else => schemaError(

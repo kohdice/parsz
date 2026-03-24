@@ -4,6 +4,7 @@ const schema = @import("schema.zig");
 const Type = std.builtin.Type;
 
 pub fn Parsed(comptime SchemaType: type) type {
+    @setEvalBranchQuota(50_000);
     _ = schema.getCommandSchema(SchemaType);
     return parsedCommandType(SchemaType);
 }
