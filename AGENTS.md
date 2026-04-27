@@ -6,7 +6,7 @@ This file provides guidance to AI agents and agentic coding tools when working w
 
 parsz is a command-line argument parser library using only the Zig standard library.
 
-- Zig version: 0.15.2 (`minimum_zig_version` in build.zig.zon)
+- Zig version: 0.16.0 (`minimum_zig_version` in build.zig.zon)
 - No external dependencies — Zig standard library only
 - GNU-style argument parsing by default (supports option/operand permutation and `--` end-of-options).
 - Not strict POSIX-only parsing. Reference: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap12.html
@@ -90,7 +90,7 @@ Always output in the following order:
 
 ## Example
 
-### Example of Displaying Hello World to Standard Error in Zig
+### Example of Displaying Hello World to Standard Error in Zig (Zig 0.16.0)
 
 ```zig
 const std = @import("std");
@@ -102,14 +102,14 @@ pub fn main() void {
 
 #### Explanation (Detailed)
 
-• `const std = @import("std");` is Zig の **標準ライブラリをインポートする組み込み関数** `@import` の呼び出しです。
+• `const std = @import("std");` は Zig の **標準ライブラリをインポートする組み込み関数** `@import` の呼び出しです。
 `@import` は指定したモジュール名に対応する `.zig` ファイルを読み込み、その公開シンボルを含む構造体を返します。ここでは `"std"` を指定することで、Zig 標準ライブラリ全体を `std` という定数に束縛しています。 [S1]
 
 • `pub fn main() void` は Zig プログラムの **エントリーポイント（開始関数）** です。
-`pub` はこの関数を外部から参照可能にする可視性修飾子で、Zig ランタイムが `main` を呼び出すために必要です。`fn` は関数定義のキーワード、`void` は戻り値がないことを示す型です。Zig では `main` の戻り値型として `void`、`!void`（エラーを返す可能性がある場合）、`u8` などを指定できます。 [S2]
+`pub` はこの関数を外部から参照可能にする可視性修飾子で、Zig ランタイムが `main` を呼び出すために必要です。`fn` は関数定義のキーワード、`void` は戻り値がないことを示す型です。Zig 0.16.0 では `main` の戻り値型として `void`、`!void`（エラーを返す可能性がある場合）、`u8` などを指定できます。なお Zig 0.16.0 で導入された新しい I/O API を用いて標準出力（stdout）へ書き込む場合は、`pub fn main(init: std.process.Init) !void` のように `std.process.Init` を引数に取り、`std.Io.File.stdout().writeStreamingAll(init.io, "...")` を呼び出す形式が公式リファレンスの主要サンプルとして示されています。本例ではエラーを返さない簡易版を採用しているため `!` は省略しています。 [S2]
 
 • `std.debug.print("Hello, World!\n", .{});` は **標準エラー出力（stderr）に文字列を書き出す** デバッグ用関数です。
-第1引数はフォーマット文字列、第2引数は `.{}` で空の匿名構造体リテラル（フォーマット引数なし）を渡しています。`std.debug.print` はロック不要で、デバッグ目的に最適化されています。 [S3]
+第1引数はフォーマット文字列、第2引数は `.{}` で空の匿名構造体リテラル（フォーマット引数なし）を渡しています。`std.debug.print` は内部でロックを取得してスレッドセーフに stderr へ書き込み、デバッグ目的に最適化されています。Zig 0.16.0 でも本関数は `std.debug` モジュールに引き続き提供されています。 [S3]
 
 • `\n` は文字列中の **改行を表すエスケープシーケンス** で、出力後にカーソルを次の行へ移動させます。これにより表示が見やすくなります。 [S3]
 
@@ -119,10 +119,10 @@ C 言語の `return 0;` のような終了コード返却は、Zig では `std.p
 #### References (Sources)
 
 • [S1] @import（モジュールインポート組み込み関数）
-https://ziglang.org/documentation/0.15.2/#import
+https://ziglang.org/documentation/0.16.0/#import
 
-• [S2] Root Source File（エントリーポイントと main 関数の仕様）
-https://ziglang.org/documentation/0.15.2/#Root-Source-File
+• [S2] Entry Point（エントリーポイントと main 関数の仕様）
+https://ziglang.org/documentation/0.16.0/#Entry-Point
 
 • [S3] std.debug.print（標準エラー出力へのデバッグ出力関数）
-https://ziglang.org/documentation/0.15.2/std/debug.html
+https://ziglang.org/documentation/0.16.0/std/#std.debug.print

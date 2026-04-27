@@ -5,7 +5,6 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     zig-overlay.url = "github:mitchellh/zig-overlay";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
   outputs =
@@ -14,7 +13,6 @@
       nixpkgs,
       flake-utils,
       zig-overlay,
-      treefmt-nix,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -24,16 +22,7 @@
           inherit system;
           overlays = [ zig-overlay.overlays.default ];
         };
-        zig = pkgs.zigpkgs."0.15.2";
-
-        treefmtEval = treefmt-nix.lib.evalModule pkgs {
-          projectRootFile = "flake.nix";
-          programs.nixfmt.enable = true;
-          programs.zig = {
-            enable = true;
-            package = zig;
-          };
-        };
+        zig = pkgs.zigpkgs."0.16.0";
       in
       {
         devShells.default = pkgs.mkShell {
@@ -43,8 +32,6 @@
             zig
           ];
         };
-
-        formatter = treefmtEval.config.build.wrapper;
       }
     );
 }

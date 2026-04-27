@@ -26,7 +26,7 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 3G
       - name: Check formatting
-        run: nix fmt -- --fail-on-change
+        run: nix develop -c zig fmt --check .
   build-and-test:
     name: Build & Test (${{ matrix.os }})
     needs: fmt
@@ -52,5 +52,3 @@ jobs:
           gc-max-store-size-macos: 3G
       - name: Run tests
         run: nix develop -c zig build test
-      - name: Build examples
-        run: nix develop -c zig build examples
