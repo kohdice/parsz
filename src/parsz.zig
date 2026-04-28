@@ -30,6 +30,29 @@ pub const ParseOptions = struct {
     abbreviate_long_options: bool = false,
 };
 
+const Token = union(enum) {
+    long_option: struct {
+        argv_index: usize,
+        raw: []const u8,
+        name: []const u8,
+        inline_value: ?[]const u8,
+    },
+    short_option: struct {
+        argv_index: usize,
+        raw: []const u8,
+        ch: u8,
+        rest: []const u8,
+    },
+    end_of_options: struct {
+        argv_index: usize,
+        raw: []const u8,
+    },
+    operand: struct {
+        argv_index: usize,
+        raw: []const u8,
+    },
+};
+
 pub const Action = enum {
     set_true,
     count,
@@ -78,7 +101,6 @@ pub fn Command(comptime declaration: anytype) type {
 
         pub fn parse(allocator: std.mem.Allocator, argv: []const []const u8, options: ParseOptions) ParseError!Result {
             _ = allocator;
-            _ = options.abbreviate_long_options;
 
             var result: Result = undefined;
             initializeResultDefaults(args, &result);
@@ -279,10 +301,7 @@ fn buildResultType(comptime args: anytype) type {
             types[index] = resultFieldType(spec);
         }
 
-        const final_names = names;
-        const final_types = types;
-        const final_attrs = attrs;
-        return @Struct(.auto, null, &final_names, &final_types, &final_attrs);
+        return @Struct(.auto, null, &names, &types, &attrs);
     }
 }
 
@@ -327,6 +346,68 @@ fn defaultValue(comptime spec: ArgSpec) spec.value_type {
     return ptr.*;
 }
 
+fn tokenize(allocator: std.mem.Allocator, argv: []const []const u8) std.mem.Allocator.Error![]Token {
+    const tokens = try allocator.alloc(Token, argv.len);
+
+    for (argv, 0..) |raw, argv_index| {
+        tokens[argv_index] = tokenizeArg(argv_index, raw);
+    }
+
+    return tokens;
+}
+
+fn tokenizeArg(argv_index: usize, raw: []const u8) Token {
+    if (std.mem.eql(u8, raw, "--")) {
+        return .{
+            .end_of_options = .{
+                .argv_index = argv_index,
+                .raw = raw,
+            },
+        };
+    }
+
+    if (std.mem.startsWith(u8, raw, "--")) {
+        const option_text = raw[2..];
+        if (std.mem.findScalar(u8, option_text, '=')) |equals_index| {
+            return .{
+                .long_option = .{
+                    .argv_index = argv_index,
+                    .raw = raw,
+                    .name = option_text[0..equals_index],
+                    .inline_value = option_text[equals_index + 1 ..],
+                },
+            };
+        }
+
+        return .{
+            .long_option = .{
+                .argv_index = argv_index,
+                .raw = raw,
+                .name = option_text,
+                .inline_value = null,
+            },
+        };
+    }
+
+    if (raw.len > 1 and raw[0] == '-') {
+        return .{
+            .short_option = .{
+                .argv_index = argv_index,
+                .raw = raw,
+                .ch = raw[1],
+                .rest = raw[2..],
+            },
+        };
+    }
+
+    return .{
+        .operand = .{
+            .argv_index = argv_index,
+            .raw = raw,
+        },
+    };
+}
+
 fn firstMissingRequiredArgName(comptime args: anytype) ?[]const u8 {
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
 
@@ -344,15 +425,11 @@ fn setUnsupportedInputDiagnostic(argv: []const []const u8, options: ParseOptions
     if (options.diagnostic) |diagnostic| {
         const raw = argv[0];
         diagnostic.* = .{
-            .kind = if (looksLikeOption(raw)) .unknown_option else .unexpected_operand,
+            .kind = if (raw.len > 1 and raw[0] == '-') .unknown_option else .unexpected_operand,
             .argv_index = 0,
             .raw_arg = raw,
         };
     }
-}
-
-fn looksLikeOption(raw: []const u8) bool {
-    return raw.len > 1 and raw[0] == '-';
 }
 
 test "schema: accepts empty command definition" {
@@ -531,4 +608,155 @@ test "runtime api: exposes result deinit as no-op for borrowed-only schemas" {
 
     var result = try Cli.parse(std.testing.allocator, &.{}, .{});
     Cli.deinit(std.testing.allocator, &result);
+}
+
+test "tokenizer: treats empty argv as empty token stream" {
+    const tokens = try tokenize(std.testing.allocator, &.{});
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 0), tokens.len);
+}
+
+test "tokenizer: classifies operands" {
+    const argv = [_][]const u8{"file.txt"};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectOperandToken(tokens[0], 0, "file.txt");
+}
+
+test "tokenizer: classifies end of options marker" {
+    const argv = [_][]const u8{"--"};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectEndOfOptionsToken(tokens[0], 0, "--");
+}
+
+test "tokenizer: does not force tokens after end marker to operands" {
+    const argv = [_][]const u8{ "--", "--verbose" };
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 2), tokens.len);
+    try expectEndOfOptionsToken(tokens[0], 0, "--");
+    try expectLongOptionToken(tokens[1], 1, "--verbose", "verbose", null);
+}
+
+test "tokenizer: classifies long option without value" {
+    const argv = [_][]const u8{"--verbose"};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectLongOptionToken(tokens[0], 0, "--verbose", "verbose", null);
+}
+
+test "tokenizer: classifies long option with inline value" {
+    const argv = [_][]const u8{"--output=path"};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectLongOptionToken(tokens[0], 0, "--output=path", "output", "path");
+}
+
+test "tokenizer: preserves empty long inline value" {
+    const argv = [_][]const u8{"--output="};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectLongOptionToken(tokens[0], 0, "--output=", "output", "");
+}
+
+test "tokenizer: classifies single hyphen as operand" {
+    const argv = [_][]const u8{"-"};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectOperandToken(tokens[0], 0, "-");
+}
+
+test "tokenizer: preserves short option suffix" {
+    const argv = [_][]const u8{"-abc"};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectShortOptionToken(tokens[0], 0, "-abc", 'a', "bc");
+}
+
+test "tokenizer: preserves attached short value candidate" {
+    const argv = [_][]const u8{"-Iinclude"};
+    const tokens = try tokenize(std.testing.allocator, argv[0..]);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectShortOptionToken(tokens[0], 0, "-Iinclude", 'I', "include");
+}
+
+fn expectOperandToken(token: Token, expected_argv_index: usize, expected_raw: []const u8) !void {
+    switch (token) {
+        .operand => |payload| {
+            try std.testing.expectEqual(expected_argv_index, payload.argv_index);
+            try std.testing.expectEqualStrings(expected_raw, payload.raw);
+        },
+        else => return error.ExpectedOperandToken,
+    }
+}
+
+fn expectEndOfOptionsToken(token: Token, expected_argv_index: usize, expected_raw: []const u8) !void {
+    switch (token) {
+        .end_of_options => |payload| {
+            try std.testing.expectEqual(expected_argv_index, payload.argv_index);
+            try std.testing.expectEqualStrings(expected_raw, payload.raw);
+        },
+        else => return error.ExpectedEndOfOptionsToken,
+    }
+}
+
+fn expectLongOptionToken(
+    token: Token,
+    expected_argv_index: usize,
+    expected_raw: []const u8,
+    expected_name: []const u8,
+    expected_inline_value: ?[]const u8,
+) !void {
+    switch (token) {
+        .long_option => |payload| {
+            try std.testing.expectEqual(expected_argv_index, payload.argv_index);
+            try std.testing.expectEqualStrings(expected_raw, payload.raw);
+            try std.testing.expectEqualStrings(expected_name, payload.name);
+
+            if (expected_inline_value) |expected| {
+                try std.testing.expect(payload.inline_value != null);
+                try std.testing.expectEqualStrings(expected, payload.inline_value.?);
+            } else {
+                try std.testing.expect(payload.inline_value == null);
+            }
+        },
+        else => return error.ExpectedLongOptionToken,
+    }
+}
+
+fn expectShortOptionToken(
+    token: Token,
+    expected_argv_index: usize,
+    expected_raw: []const u8,
+    expected_ch: u8,
+    expected_rest: []const u8,
+) !void {
+    switch (token) {
+        .short_option => |payload| {
+            try std.testing.expectEqual(expected_argv_index, payload.argv_index);
+            try std.testing.expectEqualStrings(expected_raw, payload.raw);
+            try std.testing.expectEqual(expected_ch, payload.ch);
+            try std.testing.expectEqualStrings(expected_rest, payload.rest);
+        },
+        else => return error.ExpectedShortOptionToken,
+    }
 }
