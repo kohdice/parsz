@@ -13,16 +13,156 @@ pub const ArgKind = enum {
     operand,
 };
 
+pub const StandardControl = enum {
+    help,
+    version,
+};
+
+pub const StandardControls = struct {
+    help: bool = false,
+    version: bool = false,
+};
+
+pub const LongOptionResolution = union(enum) {
+    arg: usize,
+    control: StandardControl,
+};
+
+pub const LongOptionResolutionResult = union(enum) {
+    none,
+    one: LongOptionResolution,
+    ambiguous,
+};
+
+pub const LongOption = struct {
+    name: []const u8,
+    resolution: LongOptionResolution,
+};
+
+pub const VersionMetadata = struct {
+    number: []const u8,
+    details: []const u8,
+};
+
 pub const ArgSpec = struct {
     kind: ArgKind,
     value_type: type,
     action: Action,
     short: ?u8 = null,
     long: ?[]const u8 = null,
+    help: ?[]const u8 = null,
+    value_name: ?[]const u8 = null,
     required: bool = false,
     has_default: bool = false,
     default_value_ptr: ?*const anyopaque = null,
 };
+
+pub fn standardControlLongName(control: StandardControl) []const u8 {
+    return switch (control) {
+        .help => "help",
+        .version => "version",
+    };
+}
+
+pub fn resolveExactLongOption(
+    comptime long_options: []const LongOption,
+    name: []const u8,
+) ?LongOptionResolution {
+    inline for (long_options) |long_option| {
+        if (std.mem.eql(u8, name, long_option.name)) {
+            return long_option.resolution;
+        }
+    }
+
+    return null;
+}
+
+pub fn resolveAbbreviatedLongOption(
+    comptime long_options: []const LongOption,
+    prefix: []const u8,
+) LongOptionResolutionResult {
+    var matches: usize = 0;
+    var resolution: LongOptionResolution = undefined;
+
+    inline for (long_options) |long_option| {
+        if (std.mem.startsWith(u8, long_option.name, prefix)) {
+            matches += 1;
+            resolution = long_option.resolution;
+        }
+    }
+
+    return switch (matches) {
+        0 => .none,
+        1 => .{ .one = resolution },
+        else => .ambiguous,
+    };
+}
+
+pub fn buildLongOptions(
+    comptime args: anytype,
+    comptime controls: StandardControls,
+) [longOptionCount(args, controls)]LongOption {
+    comptime {
+        const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+        var long_options: [longOptionCount(args, controls)]LongOption = undefined;
+        var index: usize = 0;
+
+        for (fields, 0..) |field_info, arg_index| {
+            const spec = @field(args, field_info.name);
+            if (spec.kind != .operand) {
+                if (spec.long) |long| {
+                    long_options[index] = .{
+                        .name = long,
+                        .resolution = .{ .arg = arg_index },
+                    };
+                    index += 1;
+                }
+            }
+        }
+
+        if (controls.help) {
+            long_options[index] = .{
+                .name = standardControlLongName(.help),
+                .resolution = .{ .control = .help },
+            };
+            index += 1;
+        }
+        if (controls.version) {
+            long_options[index] = .{
+                .name = standardControlLongName(.version),
+                .resolution = .{ .control = .version },
+            };
+            index += 1;
+        }
+
+        if (index != long_options.len) {
+            @compileError("internal long option count mismatch");
+        }
+
+        return long_options;
+    }
+}
+
+fn longOptionCount(comptime args: anytype, comptime controls: StandardControls) comptime_int {
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    comptime var count = 0;
+
+    inline for (fields) |field_info| {
+        const spec = @field(args, field_info.name);
+        if (spec.kind != .operand and spec.long != null) {
+            count += 1;
+        }
+    }
+
+    if (controls.help) {
+        count += 1;
+    }
+    if (controls.version) {
+        count += 1;
+    }
+
+    return count;
+}
 
 pub fn flag(comptime config: anytype) ArgSpec {
     return normalizeArg(.flag, void, .set_true, config);
@@ -34,6 +174,26 @@ pub fn option(comptime T: type, comptime config: anytype) ArgSpec {
 
 pub fn operand(comptime T: type, comptime config: anytype) ArgSpec {
     return normalizeArg(.operand, T, .set, config);
+}
+
+pub fn version(comptime config: anytype) VersionMetadata {
+    const Config = @TypeOf(config);
+    validateVersionConfigFields(Config);
+
+    if (!@hasField(Config, "number")) {
+        @compileError("version metadata must include a number field");
+    }
+    if (!@hasField(Config, "details")) {
+        @compileError("version metadata must include a details field");
+    }
+
+    validateNonEmptyTextField("version number", config.number);
+    validateNonEmptyTextField("version details", config.details);
+
+    return .{
+        .number = config.number,
+        .details = config.details,
+    };
 }
 
 fn normalizeArg(
@@ -50,6 +210,14 @@ fn normalizeArg(
         const default_value: T = @field(config, "default");
         break :blk @ptrCast(&default_value);
     } else null;
+    const help_text: ?[]const u8 = if (@hasField(Config, "help")) blk: {
+        validateTextField("arg help", config.help);
+        break :blk config.help;
+    } else null;
+    const value_name: ?[]const u8 = if (@hasField(Config, "value_name")) blk: {
+        validateNonEmptyTextField("arg value_name", config.value_name);
+        break :blk config.value_name;
+    } else null;
 
     return .{
         .kind = kind,
@@ -57,6 +225,8 @@ fn normalizeArg(
         .action = if (@hasField(Config, "action")) config.action else default_action,
         .short = if (@hasField(Config, "short")) config.short else null,
         .long = if (@hasField(Config, "long")) config.long else null,
+        .help = help_text,
+        .value_name = value_name,
         .required = if (@hasField(Config, "required")) config.required else false,
         .has_default = has_default,
         .default_value_ptr = default_value_ptr,
@@ -83,25 +253,37 @@ fn validateArgConfigFields(comptime kind: ArgKind, comptime Config: type) void {
 fn isAllowedArgConfigField(comptime kind: ArgKind, comptime field_name: []const u8) bool {
     if (std.mem.eql(u8, field_name, "action")) return true;
     if (std.mem.eql(u8, field_name, "required")) return true;
+    if (std.mem.eql(u8, field_name, "help")) return true;
 
     return switch (kind) {
         .flag => std.mem.eql(u8, field_name, "short") or
             std.mem.eql(u8, field_name, "long"),
         .option => std.mem.eql(u8, field_name, "short") or
             std.mem.eql(u8, field_name, "long") or
-            std.mem.eql(u8, field_name, "default"),
-        .operand => std.mem.eql(u8, field_name, "default"),
+            std.mem.eql(u8, field_name, "default") or
+            std.mem.eql(u8, field_name, "value_name"),
+        .operand => std.mem.eql(u8, field_name, "default") or
+            std.mem.eql(u8, field_name, "value_name"),
     };
 }
 
 pub fn validateCommandDeclaration(comptime declaration: anytype) void {
     const Declaration = @TypeOf(declaration);
+    validateCommandFields(Declaration);
 
     if (!@hasField(Declaration, "name")) {
         @compileError("command declaration must include a name field");
     }
     if (!@hasField(Declaration, "args")) {
         @compileError("command declaration must include an args field");
+    }
+
+    validateNonEmptyTextField("command name", declaration.name);
+    if (@hasField(Declaration, "about")) {
+        validateTextField("command about", declaration.about);
+    }
+    if (@hasField(Declaration, "version")) {
+        validateVersionMetadata(declaration.version);
     }
 
     const args_info = switch (@typeInfo(@TypeOf(declaration.args))) {
@@ -114,6 +296,90 @@ pub fn validateCommandDeclaration(comptime declaration: anytype) void {
     }
 
     validateArgs(declaration.args);
+    validateNoDuplicateLongOptions(declaration.args, .{
+        .help = true,
+        .version = @hasField(Declaration, "version"),
+    });
+}
+
+fn validateCommandFields(comptime Declaration: type) void {
+    const declaration_info = switch (@typeInfo(Declaration)) {
+        .@"struct" => |info| info,
+        else => @compileError("command declaration must be a field-named struct literal"),
+    };
+
+    if (declaration_info.is_tuple) {
+        @compileError("command declaration must be a field-named struct literal");
+    }
+
+    inline for (declaration_info.fields) |field_info| {
+        if (!isAllowedCommandField(field_info.name)) {
+            @compileError("unsupported command field '" ++ field_info.name ++ "'");
+        }
+    }
+}
+
+fn isAllowedCommandField(comptime field_name: []const u8) bool {
+    return std.mem.eql(u8, field_name, "name") or
+        std.mem.eql(u8, field_name, "about") or
+        std.mem.eql(u8, field_name, "version") or
+        std.mem.eql(u8, field_name, "args");
+}
+
+fn validateVersionConfigFields(comptime Config: type) void {
+    const config_info = switch (@typeInfo(Config)) {
+        .@"struct" => |info| info,
+        else => @compileError("version metadata must be a field-named struct literal"),
+    };
+
+    if (config_info.is_tuple and config_info.fields.len > 0) {
+        @compileError("version metadata must be a field-named struct literal");
+    }
+
+    inline for (config_info.fields) |field_info| {
+        if (!isAllowedVersionField(field_info.name)) {
+            @compileError("unsupported version metadata field '" ++ field_info.name ++ "'");
+        }
+    }
+}
+
+fn isAllowedVersionField(comptime field_name: []const u8) bool {
+    return std.mem.eql(u8, field_name, "number") or
+        std.mem.eql(u8, field_name, "details");
+}
+
+fn validateVersionMetadata(comptime value: anytype) void {
+    if (@TypeOf(value) != VersionMetadata) {
+        @compileError("command version must be created with parsz.version");
+    }
+}
+
+fn validateTextField(comptime field_description: []const u8, comptime value: anytype) void {
+    if (!isTextType(@TypeOf(value))) {
+        @compileError(field_description ++ " must be text");
+    }
+}
+
+fn validateNonEmptyTextField(comptime field_description: []const u8, comptime value: anytype) void {
+    validateTextField(field_description, value);
+    if (value.len == 0) {
+        @compileError(field_description ++ " must not be empty");
+    }
+}
+
+fn isTextType(comptime Value: type) bool {
+    return switch (@typeInfo(Value)) {
+        .pointer => |pointer| switch (pointer.size) {
+            .slice => pointer.child == u8,
+            .one => switch (@typeInfo(pointer.child)) {
+                .array => |array| array.child == u8,
+                else => false,
+            },
+            else => false,
+        },
+        .array => |array| array.child == u8,
+        else => false,
+    };
 }
 
 fn validateArgs(comptime args: anytype) void {
@@ -135,7 +401,7 @@ fn validateArgs(comptime args: anytype) void {
                 @compileError("arg '" ++ field_info.name ++ "' is an operand after a variadic operand");
             }
 
-            if (spec.action == .set and spec.required and seen_optional_operand) {
+            if (spec.required and seen_optional_operand) {
                 @compileError("arg '" ++ field_info.name ++ "' is a required operand after an optional operand");
             }
 
@@ -148,13 +414,48 @@ fn validateArgs(comptime args: anytype) void {
 
         inline for (fields[0..index]) |previous_field_info| {
             const previous = @field(args, previous_field_info.name);
-            validateNoDuplicateNames(field_info.name, spec, previous_field_info.name, previous);
+            validateNoDuplicateShortName(field_info.name, spec, previous_field_info.name, previous);
         }
     }
 }
 
+fn validateNoDuplicateLongOptions(comptime args: anytype, comptime controls: StandardControls) void {
+    const long_options = buildLongOptions(args, controls);
+
+    inline for (long_options, 0..) |long_option, index| {
+        inline for (long_options[0..index]) |previous| {
+            if (std.mem.eql(u8, long_option.name, previous.name)) {
+                duplicateLongOptionError(args, long_option.resolution, previous.resolution);
+            }
+        }
+    }
+}
+
+fn duplicateLongOptionError(
+    comptime args: anytype,
+    comptime current: LongOptionResolution,
+    comptime previous: LongOptionResolution,
+) noreturn {
+    switch (current) {
+        .arg => |current_arg_index| switch (previous) {
+            .arg => |previous_arg_index| @compileError("arg '" ++ argFieldName(args, current_arg_index) ++ "' duplicates long option name from arg '" ++ argFieldName(args, previous_arg_index) ++ "'"),
+            .control => |control| @compileError("arg '" ++ argFieldName(args, current_arg_index) ++ "' duplicates standard " ++ @tagName(control) ++ " option"),
+        },
+        .control => |control| switch (previous) {
+            .arg => |arg_index| @compileError("arg '" ++ argFieldName(args, arg_index) ++ "' duplicates standard " ++ @tagName(control) ++ " option"),
+            .control => @compileError("standard " ++ @tagName(control) ++ " option is duplicated"),
+        },
+    }
+}
+
+fn argFieldName(comptime args: anytype, comptime arg_index: usize) []const u8 {
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    return fields[arg_index].name;
+}
+
 fn validateArgSpec(comptime field_name: []const u8, comptime spec: ArgSpec) void {
     validateActionForKind(field_name, spec);
+    validateValueTypeForKind(field_name, spec);
 
     if (spec.required and spec.has_default) {
         @compileError("arg '" ++ field_name ++ "' cannot be required and have a default value");
@@ -162,6 +463,10 @@ fn validateArgSpec(comptime field_name: []const u8, comptime spec: ArgSpec) void
 
     if (spec.has_default and spec.action != .set) {
         @compileError("arg '" ++ field_name ++ "' cannot have a default value unless its action is set");
+    }
+
+    if (spec.kind != .operand and spec.short == null and spec.long == null) {
+        @compileError("arg '" ++ field_name ++ "' must declare a short or long option name");
     }
 
     if (spec.long) |long| {
@@ -186,6 +491,26 @@ fn validateActionForKind(comptime field_name: []const u8, comptime spec: ArgSpec
     }
 }
 
+fn validateValueTypeForKind(comptime field_name: []const u8, comptime spec: ArgSpec) void {
+    switch (spec.kind) {
+        .flag => {},
+        .option, .operand => if (!isSupportedValueType(spec.value_type)) {
+            @compileError("arg '" ++ field_name ++ "' has unsupported value type '" ++ @typeName(spec.value_type) ++ "'");
+        },
+    }
+}
+
+fn isSupportedValueType(comptime T: type) bool {
+    if (T == []const u8) {
+        return true;
+    }
+
+    return switch (@typeInfo(T)) {
+        .int, .@"enum" => true,
+        else => false,
+    };
+}
+
 fn validateLongName(comptime field_name: []const u8, comptime long: []const u8) void {
     if (long.len == 0) {
         @compileError("arg '" ++ field_name ++ "' has an empty long option name");
@@ -207,20 +532,12 @@ fn validateShortName(comptime field_name: []const u8, comptime short: u8) void {
     }
 }
 
-fn validateNoDuplicateNames(
+fn validateNoDuplicateShortName(
     comptime field_name: []const u8,
     comptime spec: ArgSpec,
     comptime previous_field_name: []const u8,
     comptime previous: ArgSpec,
 ) void {
-    if (spec.long) |long| {
-        if (previous.long) |previous_long| {
-            if (std.mem.eql(u8, long, previous_long)) {
-                @compileError("arg '" ++ field_name ++ "' duplicates long option name from arg '" ++ previous_field_name ++ "'");
-            }
-        }
-    }
-
     if (spec.short) |short| {
         if (previous.short) |previous_short| {
             if (short == previous_short) {

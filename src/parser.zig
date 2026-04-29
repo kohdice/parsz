@@ -10,6 +10,11 @@ const tokenize = tokenizer.tokenize;
 const ParseError = diagnostics.ParseError;
 const ParseOptions = diagnostics.ParseOptions;
 
+pub const MatchParseResult = union(enum) {
+    matches: []Match,
+    control: schema.StandardControl,
+};
+
 pub const Match = struct {
     arg_index: usize,
     raw_value: ?[]const u8,
@@ -31,10 +36,11 @@ const ValueLocation = struct {
 
 pub fn parseMatches(
     comptime args: anytype,
+    comptime long_options: []const schema.LongOption,
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     options: ParseOptions,
-) ParseError![]Match {
+) ParseError!MatchParseResult {
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
     const tokens = tokenize(allocator, argv) catch return error.OutOfMemory;
     defer allocator.free(tokens);
@@ -52,7 +58,10 @@ pub fn parseMatches(
     while (token_index < tokens.len) {
         switch (tokens[token_index]) {
             .long_option => |payload| {
-                try appendLongOptionMatch(args, allocator, &matches, occurrence_counts, payload, argv, &token_index, options);
+                if (try appendLongOptionMatch(args, long_options, allocator, &matches, occurrence_counts, payload, argv, &token_index, options)) |control| {
+                    matches.deinit(allocator);
+                    return .{ .control = control };
+                }
             },
             .short_option => |payload| {
                 try appendShortOptionMatch(args, allocator, &matches, occurrence_counts, payload, argv, &token_index, options);
@@ -96,11 +105,12 @@ pub fn parseMatches(
         token_index += 1;
     }
 
-    return matches.toOwnedSlice(allocator) catch return error.OutOfMemory;
+    return .{ .matches = matches.toOwnedSlice(allocator) catch return error.OutOfMemory };
 }
 
 fn appendLongOptionMatch(
     comptime args: anytype,
+    comptime long_options: []const schema.LongOption,
     allocator: std.mem.Allocator,
     matches: *std.ArrayList(Match),
     occurrence_counts: []usize,
@@ -108,74 +118,45 @@ fn appendLongOptionMatch(
     argv: []const []const u8,
     token_index: *usize,
     options: ParseOptions,
-) ParseError!void {
-    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-
-    inline for (fields, 0..) |field_info, arg_index| {
-        const spec = @field(args, field_info.name);
-        if (spec.kind != .operand) {
-            if (spec.long) |long| {
-                if (std.mem.eql(u8, payload.name, long)) {
-                    return appendResolvedLongOptionMatch(
-                        arg_index,
-                        field_info.name,
-                        spec,
-                        allocator,
-                        matches,
-                        occurrence_counts,
-                        payload,
-                        argv,
-                        token_index,
-                        options,
-                    );
-                }
-            }
-        }
+) ParseError!?schema.StandardControl {
+    if (schema.resolveExactLongOption(long_options, payload.name)) |resolution| {
+        return try appendResolvedLongOptionResolution(
+            args,
+            allocator,
+            matches,
+            occurrence_counts,
+            payload,
+            argv,
+            token_index,
+            options,
+            resolution,
+        );
     }
 
     if (options.abbreviate_long_options and payload.name.len > 0) {
-        var abbreviation_matches: usize = 0;
-        var abbreviation_arg_index: usize = 0;
-
-        inline for (fields, 0..) |field_info, arg_index| {
-            const spec = @field(args, field_info.name);
-            if (spec.kind != .operand) {
-                if (spec.long) |long| {
-                    if (std.mem.startsWith(u8, long, payload.name)) {
-                        abbreviation_matches += 1;
-                        abbreviation_arg_index = arg_index;
-                    }
-                }
-            }
-        }
-
-        if (abbreviation_matches > 1) {
-            return diagnostics.failWithDiagnostic(options, .{
-                .kind = .ambiguous_abbreviation,
-                .argv_index = payload.argv_index,
-                .raw_arg = payload.raw,
-                .value = payload.name,
-            });
-        }
-
-        if (abbreviation_matches == 1) {
-            inline for (fields, 0..) |field_info, arg_index| {
-                const spec = @field(args, field_info.name);
-                if (arg_index == abbreviation_arg_index) {
-                    return appendResolvedLongOptionMatch(
-                        arg_index,
-                        field_info.name,
-                        spec,
-                        allocator,
-                        matches,
-                        occurrence_counts,
-                        payload,
-                        argv,
-                        token_index,
-                        options,
-                    );
-                }
-            }
+        switch (schema.resolveAbbreviatedLongOption(long_options, payload.name)) {
+            .none => {},
+            .one => |resolution| {
+                return try appendResolvedLongOptionResolution(
+                    args,
+                    allocator,
+                    matches,
+                    occurrence_counts,
+                    payload,
+                    argv,
+                    token_index,
+                    options,
+                    resolution,
+                );
+            },
+            .ambiguous => {
+                return diagnostics.failWithDiagnostic(options, .{
+                    .kind = .ambiguous_abbreviation,
+                    .argv_index = payload.argv_index,
+                    .raw_arg = payload.raw,
+                    .value = payload.name,
+                });
+            },
         }
     }
 
@@ -185,6 +166,63 @@ fn appendLongOptionMatch(
         .raw_arg = payload.raw,
         .value = payload.name,
     });
+}
+
+fn appendResolvedLongOptionResolution(
+    comptime args: anytype,
+    allocator: std.mem.Allocator,
+    matches: *std.ArrayList(Match),
+    occurrence_counts: []usize,
+    payload: @FieldType(Token, "long_option"),
+    argv: []const []const u8,
+    token_index: *usize,
+    options: ParseOptions,
+    resolution: schema.LongOptionResolution,
+) ParseError!?schema.StandardControl {
+    switch (resolution) {
+        .control => |control| return try validateStandardControlPayload(payload, control, options),
+        .arg => |resolved_arg_index| {
+            const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+            inline for (fields, 0..) |field_info, arg_index| {
+                if (arg_index == resolved_arg_index) {
+                    try appendResolvedLongOptionMatch(
+                        arg_index,
+                        field_info.name,
+                        @field(args, field_info.name),
+                        allocator,
+                        matches,
+                        occurrence_counts,
+                        payload,
+                        argv,
+                        token_index,
+                        options,
+                    );
+                    return null;
+                }
+            }
+
+            unreachable;
+        },
+    }
+}
+
+fn validateStandardControlPayload(
+    payload: @FieldType(Token, "long_option"),
+    control: schema.StandardControl,
+    options: ParseOptions,
+) ParseError!schema.StandardControl {
+    if (payload.inline_value != null) {
+        return diagnostics.failWithDiagnostic(options, .{
+            .kind = .unexpected_value,
+            .argv_index = payload.argv_index,
+            .arg_name = schema.standardControlLongName(control),
+            .raw_arg = payload.raw,
+            .value = payload.inline_value,
+        });
+    }
+
+    return control;
 }
 
 fn appendResolvedLongOptionMatch(

@@ -15,6 +15,38 @@ const fixtures = [_]Fixture{
         .expected = "duplicates short option name",
     },
     .{
+        .path = "test/compile_errors/duplicate_standard_help.zig",
+        .expected = "duplicates standard help option",
+    },
+    .{
+        .path = "test/compile_errors/duplicate_standard_version.zig",
+        .expected = "duplicates standard version option",
+    },
+    .{
+        .path = "test/compile_errors/invalid_version_metadata.zig",
+        .expected = "command version must be created with parsz.version",
+    },
+    .{
+        .path = "test/compile_errors/missing_version_details.zig",
+        .expected = "version metadata must include a details field",
+    },
+    .{
+        .path = "test/compile_errors/render_version_without_metadata.zig",
+        .expected = "renderVersion requires command version metadata",
+    },
+    .{
+        .path = "test/compile_errors/missing_option_name.zig",
+        .expected = "must declare a short or long option name",
+    },
+    .{
+        .path = "test/compile_errors/empty_command_name.zig",
+        .expected = "command name must not be empty",
+    },
+    .{
+        .path = "test/compile_errors/empty_value_name.zig",
+        .expected = "arg value_name must not be empty",
+    },
+    .{
         .path = "test/compile_errors/invalid_long_empty.zig",
         .expected = "empty long option name",
     },
@@ -43,6 +75,10 @@ const fixtures = [_]Fixture{
         .expected = "is not a flag and must use set or append action",
     },
     .{
+        .path = "test/compile_errors/unsupported_value_type.zig",
+        .expected = "unsupported value type",
+    },
+    .{
         .path = "test/compile_errors/unknown_config_field.zig",
         .expected = "unsupported config field 'requred' for option argument",
     },
@@ -56,6 +92,10 @@ const fixtures = [_]Fixture{
     },
     .{
         .path = "test/compile_errors/required_operand_after_optional.zig",
+        .expected = "required operand after an optional operand",
+    },
+    .{
+        .path = "test/compile_errors/required_variadic_operand_after_optional.zig",
         .expected = "required operand after an optional operand",
     },
     .{
