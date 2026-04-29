@@ -43,6 +43,14 @@ const fixtures = [_]Fixture{
         .expected = "is not a flag and must use set or append action",
     },
     .{
+        .path = "test/compile_errors/unknown_config_field.zig",
+        .expected = "unsupported config field 'requred' for option argument",
+    },
+    .{
+        .path = "test/compile_errors/operand_with_option_name.zig",
+        .expected = "unsupported config field 'long' for operand argument",
+    },
+    .{
         .path = "test/compile_errors/required_operand_after_optional.zig",
         .expected = "required operand after an optional operand",
     },
