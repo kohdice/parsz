@@ -47,6 +47,10 @@ const fixtures = [_]Fixture{
         .expected = "unsupported config field 'requred' for option argument",
     },
     .{
+        .path = "test/compile_errors/args_tuple.zig",
+        .expected = "command args must be a field-named struct literal",
+    },
+    .{
         .path = "test/compile_errors/operand_with_option_name.zig",
         .expected = "unsupported config field 'long' for operand argument",
     },
