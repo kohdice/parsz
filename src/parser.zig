@@ -151,7 +151,9 @@ fn appendLongOptionMatch(
     token_index: *usize,
     options: ParseOptions,
 ) ParseError!?schema.StandardControl {
-    if (schema.resolveExactLongOption(long_options, payload.name)) |resolution| {
+    const long_option_map = comptime schema.buildLongOptionMap(long_options);
+
+    if (long_option_map.get(payload.name)) |resolution| {
         return try appendResolvedLongOptionResolution(
             args,
             allocator,

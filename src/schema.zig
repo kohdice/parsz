@@ -39,6 +39,8 @@ pub const LongOption = struct {
     resolution: LongOptionResolution,
 };
 
+pub const LongOptionMap = std.StaticStringMap(LongOptionResolution);
+
 pub const VersionMetadata = struct {
     number: []const u8,
     details: []const u8,
@@ -64,19 +66,6 @@ pub fn standardControlLongName(control: StandardControl) []const u8 {
     };
 }
 
-pub fn resolveExactLongOption(
-    comptime long_options: []const LongOption,
-    name: []const u8,
-) ?LongOptionResolution {
-    inline for (long_options) |long_option| {
-        if (std.mem.eql(u8, name, long_option.name)) {
-            return long_option.resolution;
-        }
-    }
-
-    return null;
-}
-
 pub fn resolveAbbreviatedLongOption(
     comptime long_options: []const LongOption,
     prefix: []const u8,
@@ -96,6 +85,18 @@ pub fn resolveAbbreviatedLongOption(
         1 => .{ .one = resolution },
         else => .ambiguous,
     };
+}
+
+pub fn buildLongOptionMap(comptime long_options: []const LongOption) LongOptionMap {
+    comptime {
+        var entries: [long_options.len]struct { []const u8, LongOptionResolution } = undefined;
+
+        for (long_options, 0..) |long_option, index| {
+            entries[index] = .{ long_option.name, long_option.resolution };
+        }
+
+        return LongOptionMap.initComptime(entries);
+    }
 }
 
 pub fn buildLongOptions(
