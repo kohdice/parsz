@@ -12,6 +12,7 @@ pub const ParseErrorKind = enum {
     missing_required,
     unexpected_operand,
     ambiguous_abbreviation,
+    unknown_subcommand,
 };
 
 pub const Diagnostic = struct {

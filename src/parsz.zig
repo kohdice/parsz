@@ -23,6 +23,8 @@ pub fn Command(comptime declaration: anytype) type {
 
     const Declaration = @TypeOf(declaration);
     const has_version = @hasField(Declaration, "version");
+    const subcommands = if (@hasField(Declaration, "subcommands")) declaration.subcommands else .{};
+    const has_subcommands = @typeInfo(@TypeOf(subcommands)).@"struct".fields.len > 0;
     const command_about: ?[]const u8 = if (@hasField(Declaration, "about")) declaration.about else null;
     const args = declaration.args;
     const standard_controls: schema.StandardControls = .{
@@ -31,18 +33,31 @@ pub fn Command(comptime declaration: anytype) type {
     };
     const long_options = schema.buildLongOptions(args, standard_controls);
     const parsed_type = schema.buildResultType(args);
+    const subcommand_result_type = if (has_subcommands) schema.buildSubcommandResultType(subcommands) else void;
+    const subcommand_type = if (has_subcommands) struct {
+        parsed: parsed_type,
+        command: subcommand_result_type,
+    } else void;
 
     return struct {
+        pub const is_parsz_command = true;
         pub const name = declaration.name;
         pub const Parsed = parsed_type;
-        pub const Result = union(enum) {
+        pub const SubcommandResult = subcommand_result_type;
+        pub const Subcommand = subcommand_type;
+        pub const Result = if (has_subcommands) union(enum) {
+            parsed: Parsed,
+            help,
+            version,
+            subcommand: Subcommand,
+        } else union(enum) {
             parsed: Parsed,
             help,
             version,
         };
 
         pub fn parse(allocator: std.mem.Allocator, argv: []const []const u8, options: ParseOptions) ParseError!Result {
-            const match_result = try parser.parseMatches(args, &long_options, allocator, argv, options);
+            const match_result = try parser.parseMatches(args, &long_options, subcommands, allocator, argv, options);
 
             switch (match_result) {
                 .control => |control| return switch (control) {
@@ -51,27 +66,90 @@ pub fn Command(comptime declaration: anytype) type {
                 },
                 .matches => |matches| {
                     defer allocator.free(matches);
+                    return .{ .parsed = try parseMatched(allocator, matches, options) };
+                },
+                .subcommand => |invocation| {
+                    if (comptime has_subcommands) {
+                        defer allocator.free(invocation.matches);
 
-                    var parsed: Parsed = undefined;
-                    schema.initializeResultDefaults(args, &parsed);
-                    errdefer deinitParsed(allocator, &parsed);
+                        var parsed = try parseMatched(allocator, invocation.matches, options);
+                        errdefer deinitParsed(allocator, &parsed);
 
-                    try semantic.applyMatches(args, allocator, matches, &parsed, options);
-                    try semantic.validateRequiredMatches(args, matches, options);
-                    return .{ .parsed = parsed };
+                        return .{ .subcommand = .{
+                            .parsed = parsed,
+                            .command = try parseSubcommandInvocation(allocator, argv, options, invocation),
+                        } };
+                    } else {
+                        unreachable;
+                    }
                 },
             }
         }
 
+        fn parseMatched(
+            allocator: std.mem.Allocator,
+            matches: []const parser.Match,
+            options: ParseOptions,
+        ) ParseError!Parsed {
+            var parsed: Parsed = undefined;
+            schema.initializeResultDefaults(args, &parsed);
+            errdefer deinitParsed(allocator, &parsed);
+
+            try semantic.applyMatches(args, allocator, matches, &parsed, options);
+            try semantic.validateRequiredMatches(args, matches, options);
+            return parsed;
+        }
+
+        fn parseSubcommandInvocation(
+            allocator: std.mem.Allocator,
+            argv: []const []const u8,
+            options: ParseOptions,
+            invocation: parser.SubcommandInvocation,
+        ) ParseError!SubcommandResult {
+            const fields = @typeInfo(@TypeOf(subcommands)).@"struct".fields;
+
+            inline for (fields, 0..) |field_info, subcommand_index| {
+                if (invocation.subcommand_index == subcommand_index) {
+                    const Child = @field(subcommands, field_info.name);
+                    const child_result = try Child.parse(allocator, argv[invocation.argv_index + 1 ..], options);
+                    return @unionInit(SubcommandResult, field_info.name, child_result);
+                }
+            }
+
+            unreachable;
+        }
+
         pub fn deinit(allocator: std.mem.Allocator, result: *Result) void {
-            switch (result.*) {
-                .parsed => |*parsed| deinitParsed(allocator, parsed),
-                .help, .version => {},
+            if (comptime has_subcommands) {
+                switch (result.*) {
+                    .parsed => |*parsed| deinitParsed(allocator, parsed),
+                    .help, .version => {},
+                    .subcommand => |*subcommand_node| deinitSubcommand(allocator, subcommand_node),
+                }
+            } else {
+                switch (result.*) {
+                    .parsed => |*parsed| deinitParsed(allocator, parsed),
+                    .help, .version => {},
+                }
             }
         }
 
         fn deinitParsed(allocator: std.mem.Allocator, parsed: *Parsed) void {
             schema.deinitResult(args, allocator, parsed);
+        }
+
+        fn deinitSubcommand(allocator: std.mem.Allocator, subcommand_node: *Subcommand) void {
+            deinitParsed(allocator, &subcommand_node.parsed);
+            deinitSubcommandResult(allocator, &subcommand_node.command);
+        }
+
+        fn deinitSubcommandResult(allocator: std.mem.Allocator, subcommand_result: *SubcommandResult) void {
+            switch (subcommand_result.*) {
+                inline else => |*child_result, tag| {
+                    const Child = @field(subcommands, @tagName(tag));
+                    Child.deinit(allocator, child_result);
+                },
+            }
         }
 
         pub fn renderUsage(allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
@@ -1754,6 +1832,80 @@ test "version: user declared version remains ordinary without version metadata" 
     }
 }
 
+test "subcommand: parses one nested command" {
+    const Cli = Command(.{
+        .name = "git",
+        .args = .{
+            .verbose = flag(.{
+                .long = "verbose",
+            }),
+        },
+        .subcommands = .{
+            .remote = Command(.{
+                .name = "remote",
+                .args = .{},
+                .subcommands = .{
+                    .add = Command(.{
+                        .name = "add",
+                        .args = .{
+                            .name = operand([]const u8, .{
+                                .required = true,
+                            }),
+                        },
+                    }),
+                },
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{ "--verbose", "remote", "add", "origin" };
+    var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
+    defer Cli.deinit(std.testing.allocator, &parse_result);
+
+    switch (parse_result) {
+        .subcommand => |node| {
+            try std.testing.expect(node.parsed.verbose);
+            switch (node.command) {
+                .remote => |remote_result| switch (remote_result) {
+                    .subcommand => |remote_node| switch (remote_node.command) {
+                        .add => |add_result| switch (add_result) {
+                            .parsed => |result| try std.testing.expectEqualStrings("origin", result.name),
+                            else => return error.ExpectedParsedResult,
+                        },
+                    },
+                    else => return error.ExpectedSubcommandResult,
+                },
+            }
+        },
+        else => return error.ExpectedSubcommandResult,
+    }
+}
+
+test "subcommand: reports unknown subcommand" {
+    const Cli = Command(.{
+        .name = "git",
+        .args = .{},
+        .subcommands = .{
+            .remote = Command(.{
+                .name = "remote",
+                .args = .{},
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{"branch"};
+    var diagnostic: Diagnostic = undefined;
+
+    try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
+        .diagnostic = &diagnostic,
+    }));
+
+    try std.testing.expectEqual(ParseErrorKind.unknown_subcommand, diagnostic.kind);
+    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqualStrings("branch", diagnostic.raw_arg.?);
+    try std.testing.expectEqualStrings("branch", diagnostic.value.?);
+}
+
 test "integration: declarative command parses typed result" {
     const Mode = enum { fast, safe };
     const Cli = Command(.{
@@ -1805,12 +1957,7 @@ fn parseTestResult(
     const parse_result = try Cli.parse(allocator, argv, options);
     return switch (parse_result) {
         .parsed => |result| result,
-        .help => {
-            return error.ExpectedParsedResult;
-        },
-        .version => {
-            return error.ExpectedParsedResult;
-        },
+        else => return error.ExpectedParsedResult,
     };
 }
 

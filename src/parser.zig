@@ -13,6 +13,13 @@ const ParseOptions = diagnostics.ParseOptions;
 pub const MatchParseResult = union(enum) {
     matches: []Match,
     control: schema.StandardControl,
+    subcommand: SubcommandInvocation,
+};
+
+pub const SubcommandInvocation = struct {
+    matches: []Match,
+    subcommand_index: usize,
+    argv_index: usize,
 };
 
 pub const Match = struct {
@@ -37,11 +44,13 @@ const ValueLocation = struct {
 pub fn parseMatches(
     comptime args: anytype,
     comptime long_options: []const schema.LongOption,
+    comptime subcommands: anytype,
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     options: ParseOptions,
 ) ParseError!MatchParseResult {
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    const has_subcommands = @typeInfo(@TypeOf(subcommands)).@"struct".fields.len > 0;
     const tokens = tokenize(allocator, argv) catch return error.OutOfMemory;
     defer allocator.free(tokens);
 
@@ -89,6 +98,23 @@ pub fn parseMatches(
                 break;
             },
             .operand => |payload| {
+                if (comptime has_subcommands) {
+                    if (findSubcommandIndex(subcommands, payload.raw)) |subcommand_index| {
+                        return .{ .subcommand = .{
+                            .matches = matches.toOwnedSlice(allocator) catch return error.OutOfMemory,
+                            .subcommand_index = subcommand_index,
+                            .argv_index = payload.argv_index,
+                        } };
+                    }
+
+                    return diagnostics.failWithDiagnostic(options, .{
+                        .kind = .unknown_subcommand,
+                        .argv_index = payload.argv_index,
+                        .raw_arg = payload.raw,
+                        .value = payload.raw,
+                    });
+                }
+
                 try appendOperandMatch(
                     args,
                     allocator,
@@ -106,6 +132,19 @@ pub fn parseMatches(
     }
 
     return .{ .matches = matches.toOwnedSlice(allocator) catch return error.OutOfMemory };
+}
+
+fn findSubcommandIndex(comptime subcommands: anytype, name: []const u8) ?usize {
+    const fields = @typeInfo(@TypeOf(subcommands)).@"struct".fields;
+
+    inline for (fields, 0..) |field_info, subcommand_index| {
+        const Child = @field(subcommands, field_info.name);
+        if (std.mem.eql(u8, name, Child.name)) {
+            return subcommand_index;
+        }
+    }
+
+    return null;
 }
 
 fn appendLongOptionMatch(

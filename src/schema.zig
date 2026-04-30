@@ -285,6 +285,9 @@ pub fn validateCommandDeclaration(comptime declaration: anytype) void {
     if (@hasField(Declaration, "version")) {
         validateVersionMetadata(declaration.version);
     }
+    if (@hasField(Declaration, "subcommands")) {
+        validateSubcommands(declaration.subcommands);
+    }
 
     const args_info = switch (@typeInfo(@TypeOf(declaration.args))) {
         .@"struct" => |info| info,
@@ -296,6 +299,9 @@ pub fn validateCommandDeclaration(comptime declaration: anytype) void {
     }
 
     validateArgs(declaration.args);
+    if (@hasField(Declaration, "subcommands")) {
+        validateNoOperandsWithSubcommands(declaration.args, declaration.subcommands);
+    }
     validateNoDuplicateLongOptions(declaration.args, .{
         .help = true,
         .version = @hasField(Declaration, "version"),
@@ -323,7 +329,68 @@ fn isAllowedCommandField(comptime field_name: []const u8) bool {
     return std.mem.eql(u8, field_name, "name") or
         std.mem.eql(u8, field_name, "about") or
         std.mem.eql(u8, field_name, "version") or
-        std.mem.eql(u8, field_name, "args");
+        std.mem.eql(u8, field_name, "args") or
+        std.mem.eql(u8, field_name, "subcommands");
+}
+
+fn validateSubcommands(comptime subcommands: anytype) void {
+    const subcommands_info = switch (@typeInfo(@TypeOf(subcommands))) {
+        .@"struct" => |info| info,
+        else => @compileError("command subcommands must be a field-named struct literal"),
+    };
+
+    if (subcommands_info.is_tuple and subcommands_info.fields.len > 0) {
+        @compileError("command subcommands must be a field-named struct literal");
+    }
+
+    inline for (subcommands_info.fields, 0..) |field_info, index| {
+        const Child = @field(subcommands, field_info.name);
+        if (@TypeOf(Child) != type or !@hasDecl(Child, "is_parsz_command")) {
+            @compileError("subcommand '" ++ field_info.name ++ "' must be created with parsz.Command");
+        }
+
+        inline for (subcommands_info.fields[0..index]) |previous_field_info| {
+            const Previous = @field(subcommands, previous_field_info.name);
+            if (std.mem.eql(u8, Child.name, Previous.name)) {
+                @compileError("subcommand '" ++ field_info.name ++ "' duplicates command name from subcommand '" ++ previous_field_info.name ++ "'");
+            }
+        }
+    }
+}
+
+fn validateNoOperandsWithSubcommands(comptime args: anytype, comptime subcommands: anytype) void {
+    if (@typeInfo(@TypeOf(subcommands)).@"struct".fields.len == 0) {
+        return;
+    }
+
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    inline for (fields) |field_info| {
+        if (@field(args, field_info.name).kind == .operand) {
+            @compileError("arg '" ++ field_info.name ++ "' cannot be an operand because command declares subcommands");
+        }
+    }
+}
+
+pub fn buildSubcommandResultType(comptime subcommands: anytype) type {
+    const fields = @typeInfo(@TypeOf(subcommands)).@"struct".fields;
+
+    comptime {
+        if (fields.len == 0) {
+            @compileError("internal subcommand result type requires at least one subcommand");
+        }
+
+        var names: [fields.len][]const u8 = undefined;
+        var types: [fields.len]type = undefined;
+
+        for (fields, 0..) |field_info, index| {
+            const Child = @field(subcommands, field_info.name);
+            names[index] = field_info.name;
+            types[index] = Child.Result;
+        }
+
+        const Tag = std.meta.FieldEnum(@TypeOf(subcommands));
+        return @Union(.auto, Tag, &names, &types, &@splat(.{}));
+    }
 }
 
 fn validateVersionConfigFields(comptime Config: type) void {
