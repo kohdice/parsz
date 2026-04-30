@@ -17,13 +17,13 @@ pub fn build(b: *std.Build) void {
     const run_lib_tests = b.addRunArtifact(lib_tests);
 
     const example_mod = b.createModule(.{
-        .root_source_file = b.path("examples/grep.zig"),
+        .root_source_file = b.path("examples/greet.zig"),
         .target = target,
         .optimize = optimize,
     });
     example_mod.addImport("parsz", mod);
-    const grep_example = b.addExecutable(.{
-        .name = "parsz-example-grep",
+    const greet_example = b.addExecutable(.{
+        .name = "parsz-example-greet",
         .root_module = example_mod,
     });
 
@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_lib_tests.step);
-    test_step.dependOn(&grep_example.step);
+    test_step.dependOn(&greet_example.step);
     test_step.dependOn(&subcommands_example.step);
     test_step.dependOn(&run_compile_error_tests.step);
 }

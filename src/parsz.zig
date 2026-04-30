@@ -57,7 +57,27 @@ pub fn Command(comptime declaration: anytype) type {
         };
 
         pub fn parse(allocator: std.mem.Allocator, argv: []const []const u8, options: ParseOptions) ParseError!Result {
-            const match_result = try parser.parseMatches(args, &long_options, subcommands, allocator, argv, options);
+            const user_args = if (argv.len > 0) argv[1..] else argv[0..0];
+            const argv_index_base: usize = if (argv.len > 0) 1 else 0;
+
+            return parseUserArgs(allocator, user_args, argv_index_base, options);
+        }
+
+        fn parseUserArgs(
+            allocator: std.mem.Allocator,
+            user_args: []const []const u8,
+            argv_index_base: usize,
+            options: ParseOptions,
+        ) ParseError!Result {
+            const match_result = try parser.parseMatches(
+                args,
+                &long_options,
+                subcommands,
+                allocator,
+                user_args,
+                argv_index_base,
+                options,
+            );
 
             switch (match_result) {
                 .control => |control| return switch (control) {
@@ -77,7 +97,7 @@ pub fn Command(comptime declaration: anytype) type {
 
                         return .{ .subcommand = .{
                             .parsed = parsed,
-                            .command = try parseSubcommandInvocation(allocator, argv, options, invocation),
+                            .command = try parseSubcommandInvocation(allocator, user_args, options, invocation),
                         } };
                     } else {
                         unreachable;
@@ -102,7 +122,7 @@ pub fn Command(comptime declaration: anytype) type {
 
         fn parseSubcommandInvocation(
             allocator: std.mem.Allocator,
-            argv: []const []const u8,
+            user_args: []const []const u8,
             options: ParseOptions,
             invocation: parser.SubcommandInvocation,
         ) ParseError!SubcommandResult {
@@ -111,7 +131,14 @@ pub fn Command(comptime declaration: anytype) type {
             inline for (fields, 0..) |field_info, subcommand_index| {
                 if (invocation.subcommand_index == subcommand_index) {
                     const Child = @field(subcommands, field_info.name);
-                    const child_result = try Child.parse(allocator, argv[invocation.argv_index + 1 ..], options);
+                    const child_user_args = user_args[invocation.user_arg_index + 1 ..];
+                    const child_argv_index_base = invocation.argv_index + 1;
+                    const child_result = try Child.parseUserArgs(
+                        allocator,
+                        child_user_args,
+                        child_argv_index_base,
+                        options,
+                    );
                     return @unionInit(SubcommandResult, field_info.name, child_result);
                 }
             }
@@ -273,7 +300,7 @@ test "schema: maps actions and required/default settings to result field types" 
     try std.testing.expect(@FieldType(Cli.Parsed, "include") == []const []const u8);
 }
 
-test "runtime api: parses borrowed argv slices without argv zero" {
+test "runtime api: parse accepts process argv and skips argv zero" {
     const Cli = Command(.{
         .name = "app",
         .args = .{
@@ -283,13 +310,48 @@ test "runtime api: parses borrowed argv slices without argv zero" {
         },
     });
 
-    const process_argv = [_][]const u8{"app"};
-    const user_args = process_argv[1..];
+    const argv = [_][]const u8{ "app", "--verbose" };
 
-    var result = try parseTestResult(Cli, std.testing.allocator, user_args, .{});
-    defer Cli.deinitParsed(std.testing.allocator, &result);
+    var result = try Cli.parse(std.testing.allocator, argv[0..], .{});
+    defer Cli.deinit(std.testing.allocator, &result);
 
-    try std.testing.expect(!result.verbose);
+    switch (result) {
+        .parsed => |parsed| try std.testing.expect(parsed.verbose),
+        else => return error.ExpectedParsedResult,
+    }
+}
+
+test "runtime api: parse accepts empty argv as empty process argv" {
+    const Cli = Command(.{
+        .name = "app",
+        .args = .{},
+    });
+
+    var result = try Cli.parse(std.testing.allocator, &.{}, .{});
+    defer Cli.deinit(std.testing.allocator, &result);
+
+    switch (result) {
+        .parsed => |parsed| try std.testing.expectEqual(@as(usize, 0), @typeInfo(@TypeOf(parsed)).@"struct".fields.len),
+        else => return error.ExpectedParsedResult,
+    }
+}
+
+test "runtime api: parse reports diagnostics in caller argv coordinates" {
+    const Cli = Command(.{
+        .name = "app",
+        .args = .{},
+    });
+
+    const argv = [_][]const u8{ "app", "extra" };
+    var diagnostic: Diagnostic = undefined;
+
+    try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
+        .diagnostic = &diagnostic,
+    }));
+
+    try std.testing.expectEqual(ParseErrorKind.unexpected_operand, diagnostic.kind);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
+    try std.testing.expectEqualStrings("extra", diagnostic.raw_arg.?);
 }
 
 test "runtime api: reports diagnostics through parse options" {
@@ -306,7 +368,7 @@ test "runtime api: reports diagnostics through parse options" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unexpected_operand, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
     try std.testing.expectEqualStrings("extra", diagnostic.raw_arg.?);
 }
 
@@ -368,7 +430,7 @@ test "runtime api: exposes result deinit as no-op for borrowed-only schemas" {
 }
 
 test "tokenizer: treats empty argv as empty token stream" {
-    const tokens = try tokenizer.tokenize(std.testing.allocator, &.{});
+    const tokens = try tokenizer.tokenize(std.testing.allocator, &.{}, 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 0), tokens.len);
@@ -376,16 +438,25 @@ test "tokenizer: treats empty argv as empty token stream" {
 
 test "tokenizer: classifies operands" {
     const argv = [_][]const u8{"file.txt"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
     try expectOperandToken(tokens[0], 0, "file.txt");
 }
 
+test "tokenizer: offsets token indexes by argv base" {
+    const argv = [_][]const u8{"file.txt"};
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 3);
+    defer std.testing.allocator.free(tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.len);
+    try expectOperandToken(tokens[0], 3, "file.txt");
+}
+
 test "tokenizer: classifies end of options marker" {
     const argv = [_][]const u8{"--"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
@@ -394,7 +465,7 @@ test "tokenizer: classifies end of options marker" {
 
 test "tokenizer: does not force tokens after end marker to operands" {
     const argv = [_][]const u8{ "--", "--verbose" };
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 2), tokens.len);
@@ -404,7 +475,7 @@ test "tokenizer: does not force tokens after end marker to operands" {
 
 test "tokenizer: classifies long option without value" {
     const argv = [_][]const u8{"--verbose"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
@@ -413,7 +484,7 @@ test "tokenizer: classifies long option without value" {
 
 test "tokenizer: classifies long option with inline value" {
     const argv = [_][]const u8{"--output=path"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
@@ -422,7 +493,7 @@ test "tokenizer: classifies long option with inline value" {
 
 test "tokenizer: preserves empty long inline value" {
     const argv = [_][]const u8{"--output="};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
@@ -431,7 +502,7 @@ test "tokenizer: preserves empty long inline value" {
 
 test "tokenizer: classifies single hyphen as operand" {
     const argv = [_][]const u8{"-"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
@@ -440,7 +511,7 @@ test "tokenizer: classifies single hyphen as operand" {
 
 test "tokenizer: preserves short option suffix" {
     const argv = [_][]const u8{"-abc"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
@@ -449,7 +520,7 @@ test "tokenizer: preserves short option suffix" {
 
 test "tokenizer: preserves attached short value candidate" {
     const argv = [_][]const u8{"-Iinclude"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..]);
+    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
     defer std.testing.allocator.free(tokens);
 
     try std.testing.expectEqual(@as(usize, 1), tokens.len);
@@ -972,7 +1043,7 @@ test "parser: reports unknown long option with diagnostic" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unknown_option, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
     try std.testing.expectEqualStrings("--missing", diagnostic.raw_arg.?);
 }
 
@@ -990,7 +1061,7 @@ test "parser: reports unknown short option with diagnostic" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unknown_option, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
     try std.testing.expectEqual(@as(?usize, 1), diagnostic.cluster_offset);
     try std.testing.expectEqualStrings("-x", diagnostic.raw_arg.?);
 }
@@ -1013,7 +1084,7 @@ test "parser: reports unknown short option inside cluster with diagnostic offset
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unknown_option, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
     try std.testing.expectEqual(@as(?usize, 2), diagnostic.cluster_offset);
     try std.testing.expectEqualStrings("-ax", diagnostic.raw_arg.?);
 }
@@ -1122,7 +1193,7 @@ test "semantic: reports unexpected operand with diagnostic" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unexpected_operand, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 2), diagnostic.argv_index);
     try std.testing.expectEqualStrings("extra", diagnostic.raw_arg.?);
 }
 
@@ -1207,7 +1278,7 @@ test "semantic: deinit releases collected append storage" {
         },
     });
 
-    const argv = [_][]const u8{ "-I", "a", "-I", "b" };
+    const argv = [_][]const u8{ "test", "-I", "a", "-I", "b" };
     var result = try Cli.parse(std.testing.allocator, argv[0..], .{});
 
     switch (result) {
@@ -1313,7 +1384,7 @@ test "semantic: reports invalid separated integer value at value argv index" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.invalid_value, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 2), diagnostic.argv_index);
     try std.testing.expectEqual(@as(?usize, null), diagnostic.cluster_offset);
     try std.testing.expectEqualStrings("port", diagnostic.arg_name.?);
     try std.testing.expectEqualStrings("abc", diagnostic.raw_arg.?);
@@ -1362,7 +1433,7 @@ test "semantic: reports short separated integer overflow at value argv index" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.overflow, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 2), diagnostic.argv_index);
     try std.testing.expectEqual(@as(?usize, null), diagnostic.cluster_offset);
     try std.testing.expectEqualStrings("port", diagnostic.arg_name.?);
     try std.testing.expectEqualStrings("300", diagnostic.raw_arg.?);
@@ -1478,7 +1549,7 @@ test "help: handles explicit help request without ParseFailed" {
         },
     });
 
-    const argv = [_][]const u8{"--help"};
+    const argv = [_][]const u8{ "test", "--help" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1494,7 +1565,7 @@ test "help: rejects inline value for standard help option" {
         .args = .{},
     });
 
-    const argv = [_][]const u8{"--help=value"};
+    const argv = [_][]const u8{ "test", "--help=value" };
     var diagnostic: Diagnostic = undefined;
 
     try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
@@ -1502,7 +1573,7 @@ test "help: rejects inline value for standard help option" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unexpected_value, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
     try std.testing.expectEqualStrings("help", diagnostic.arg_name.?);
     try std.testing.expectEqualStrings("--help=value", diagnostic.raw_arg.?);
     try std.testing.expectEqualStrings("value", diagnostic.value.?);
@@ -1591,7 +1662,7 @@ test "help: ignores later invalid arguments after standard help request" {
         },
     });
 
-    const argv = [_][]const u8{ "--help", "--unknown", "missing" };
+    const argv = [_][]const u8{ "test", "--help", "--unknown", "missing" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1614,7 +1685,7 @@ test "parse: returns parsed result for normal command input" {
         },
     });
 
-    const argv = [_][]const u8{ "--verbose", "input.txt" };
+    const argv = [_][]const u8{ "test", "--verbose", "input.txt" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1633,7 +1704,7 @@ test "help: parses unique standard help abbreviation when enabled" {
         .args = .{},
     });
 
-    const argv = [_][]const u8{"--hel"};
+    const argv = [_][]const u8{ "test", "--hel" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{
         .abbreviate_long_options = true,
     });
@@ -1655,7 +1726,7 @@ test "help: exact user long option wins over standard help abbreviation" {
         },
     });
 
-    const argv = [_][]const u8{"--he"};
+    const argv = [_][]const u8{ "test", "--he" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{
         .abbreviate_long_options = true,
     });
@@ -1677,7 +1748,7 @@ test "help: standard help abbreviation participates in ambiguity checks" {
         },
     });
 
-    const argv = [_][]const u8{"--h"};
+    const argv = [_][]const u8{ "test", "--h" };
     var diagnostic: Diagnostic = undefined;
 
     try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
@@ -1720,7 +1791,7 @@ test "version: handles explicit version request without ParseFailed" {
         },
     });
 
-    const argv = [_][]const u8{"--version"};
+    const argv = [_][]const u8{ "test", "--version" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1737,7 +1808,7 @@ test "version: rejects inline value for standard version option" {
         .args = .{},
     });
 
-    const argv = [_][]const u8{"--version=value"};
+    const argv = [_][]const u8{ "test", "--version=value" };
     var diagnostic: Diagnostic = undefined;
 
     try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
@@ -1745,7 +1816,7 @@ test "version: rejects inline value for standard version option" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unexpected_value, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
     try std.testing.expectEqualStrings("version", diagnostic.arg_name.?);
     try std.testing.expectEqualStrings("--version=value", diagnostic.raw_arg.?);
     try std.testing.expectEqualStrings("value", diagnostic.value.?);
@@ -1762,7 +1833,7 @@ test "version: ignores later invalid arguments after standard version request" {
         },
     });
 
-    const argv = [_][]const u8{ "--version", "--unknown", "missing" };
+    const argv = [_][]const u8{ "test", "--version", "--unknown", "missing" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1783,7 +1854,7 @@ test "version: standard version abbreviation participates in ambiguity checks" {
         },
     });
 
-    const argv = [_][]const u8{"--ver"};
+    const argv = [_][]const u8{ "test", "--ver" };
     var diagnostic: Diagnostic = undefined;
 
     try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
@@ -1801,7 +1872,7 @@ test "version: does not inject implicit version option without version metadata"
         .args = .{},
     });
 
-    const argv = [_][]const u8{"--version"};
+    const argv = [_][]const u8{ "test", "--version" };
     var diagnostic: Diagnostic = undefined;
 
     try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
@@ -1822,7 +1893,7 @@ test "version: user declared version remains ordinary without version metadata" 
         },
     });
 
-    const argv = [_][]const u8{"--version"};
+    const argv = [_][]const u8{ "test", "--version" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1858,7 +1929,7 @@ test "subcommand: parses one nested command" {
         },
     });
 
-    const argv = [_][]const u8{ "--verbose", "remote", "add", "origin" };
+    const argv = [_][]const u8{ "test", "--verbose", "remote", "add", "origin" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1893,7 +1964,7 @@ test "subcommand: reports unknown subcommand" {
         },
     });
 
-    const argv = [_][]const u8{"branch"};
+    const argv = [_][]const u8{ "test", "branch" };
     var diagnostic: Diagnostic = undefined;
 
     try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
@@ -1901,9 +1972,63 @@ test "subcommand: reports unknown subcommand" {
     }));
 
     try std.testing.expectEqual(ParseErrorKind.unknown_subcommand, diagnostic.kind);
-    try std.testing.expectEqual(@as(?usize, 0), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
     try std.testing.expectEqualStrings("branch", diagnostic.raw_arg.?);
     try std.testing.expectEqualStrings("branch", diagnostic.value.?);
+}
+
+test "subcommand: child diagnostics preserve root argv coordinates" {
+    const Cli = Command(.{
+        .name = "git",
+        .args = .{},
+        .subcommands = .{
+            .remote = Command(.{
+                .name = "remote",
+                .args = .{},
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{ "git", "remote", "--bad" };
+    var diagnostic: Diagnostic = undefined;
+
+    try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
+        .diagnostic = &diagnostic,
+    }));
+
+    try std.testing.expectEqual(ParseErrorKind.unknown_option, diagnostic.kind);
+    try std.testing.expectEqual(@as(?usize, 2), diagnostic.argv_index);
+    try std.testing.expectEqualStrings("--bad", diagnostic.raw_arg.?);
+}
+
+test "subcommand: nested child diagnostics preserve root argv coordinates" {
+    const Cli = Command(.{
+        .name = "git",
+        .args = .{},
+        .subcommands = .{
+            .remote = Command(.{
+                .name = "remote",
+                .args = .{},
+                .subcommands = .{
+                    .add = Command(.{
+                        .name = "add",
+                        .args = .{},
+                    }),
+                },
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{ "git", "remote", "add", "--bad" };
+    var diagnostic: Diagnostic = undefined;
+
+    try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
+        .diagnostic = &diagnostic,
+    }));
+
+    try std.testing.expectEqual(ParseErrorKind.unknown_option, diagnostic.kind);
+    try std.testing.expectEqual(@as(?usize, 3), diagnostic.argv_index);
+    try std.testing.expectEqualStrings("--bad", diagnostic.raw_arg.?);
 }
 
 test "integration: declarative command parses typed result" {
@@ -1933,7 +2058,7 @@ test "integration: declarative command parses typed result" {
         },
     });
 
-    const argv = [_][]const u8{ "input.txt", "-v", "--output=out.txt", "--mode", "fast" };
+    const argv = [_][]const u8{ "test", "input.txt", "-v", "--output=out.txt", "--mode", "fast" };
     var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
     defer Cli.deinit(std.testing.allocator, &parse_result);
 
@@ -1954,7 +2079,13 @@ fn parseTestResult(
     argv: []const []const u8,
     options: ParseOptions,
 ) !Cli.Parsed {
-    const parse_result = try Cli.parse(allocator, argv, options);
+    const process_argv = try allocator.alloc([]const u8, argv.len + 1);
+    defer allocator.free(process_argv);
+
+    process_argv[0] = "test";
+    @memcpy(process_argv[1..], argv);
+
+    const parse_result = try Cli.parse(allocator, process_argv, options);
     return switch (parse_result) {
         .parsed => |result| result,
         else => return error.ExpectedParsedResult,

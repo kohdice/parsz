@@ -20,6 +20,7 @@ pub const SubcommandInvocation = struct {
     matches: []Match,
     subcommand_index: usize,
     argv_index: usize,
+    user_arg_index: usize,
 };
 
 pub const Match = struct {
@@ -46,12 +47,13 @@ pub fn parseMatches(
     comptime long_options: []const schema.LongOption,
     comptime subcommands: anytype,
     allocator: std.mem.Allocator,
-    argv: []const []const u8,
+    user_args: []const []const u8,
+    argv_index_base: usize,
     options: ParseOptions,
 ) ParseError!MatchParseResult {
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
     const has_subcommands = @typeInfo(@TypeOf(subcommands)).@"struct".fields.len > 0;
-    const tokens = tokenize(allocator, argv) catch return error.OutOfMemory;
+    const tokens = tokenize(allocator, user_args, argv_index_base) catch return error.OutOfMemory;
     defer allocator.free(tokens);
 
     var matches: std.ArrayList(Match) = .empty;
@@ -67,13 +69,13 @@ pub fn parseMatches(
     while (token_index < tokens.len) {
         switch (tokens[token_index]) {
             .long_option => |payload| {
-                if (try appendLongOptionMatch(args, long_options, allocator, &matches, occurrence_counts, payload, argv, &token_index, options)) |control| {
+                if (try appendLongOptionMatch(args, long_options, allocator, &matches, occurrence_counts, payload, user_args, &token_index, options)) |control| {
                     matches.deinit(allocator);
                     return .{ .control = control };
                 }
             },
             .short_option => |payload| {
-                try appendShortOptionMatch(args, allocator, &matches, occurrence_counts, payload, argv, &token_index, options);
+                try appendShortOptionMatch(args, allocator, &matches, occurrence_counts, payload, user_args, &token_index, options);
             },
             .end_of_options => {
                 token_index += 1;
@@ -104,6 +106,7 @@ pub fn parseMatches(
                             .matches = matches.toOwnedSlice(allocator) catch return error.OutOfMemory,
                             .subcommand_index = subcommand_index,
                             .argv_index = payload.argv_index,
+                            .user_arg_index = token_index,
                         } };
                     }
 
@@ -311,10 +314,11 @@ fn appendResolvedLongOptionMatch(
                         .raw_arg = payload.raw,
                     });
                 }
+                const value_argv_index = payload.argv_index + (value_index - token_index.*);
                 token_index.* = value_index;
                 break :value .{
                     .raw_value = argv[value_index],
-                    .argv_index = value_index,
+                    .argv_index = value_argv_index,
                     .raw_arg = argv[value_index],
                     .cluster_offset = null,
                 };
@@ -389,10 +393,11 @@ fn appendShortOptionMatch(
                                         });
                                     }
 
+                                    const value_argv_index = payload.argv_index + (value_index - token_index.*);
                                     token_index.* = value_index;
                                     break :value .{
                                         .raw_value = argv[value_index],
-                                        .argv_index = value_index,
+                                        .argv_index = value_argv_index,
                                         .raw_arg = argv[value_index],
                                         .cluster_offset = null,
                                     };

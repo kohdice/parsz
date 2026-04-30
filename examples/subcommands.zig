@@ -94,35 +94,40 @@ const Cli = parsz.Command(.{
 
 pub fn main(init: std.process.Init) !void {
     const argv = try init.minimal.args.toSlice(init.arena.allocator());
-    const user_args = if (argv.len > 0) argv[1..] else argv[0..0];
 
-    var args = try Cli.parse(init.arena.allocator(), user_args, .{});
+    var args = try Cli.parse(init.arena.allocator(), argv, .{});
     defer Cli.deinit(init.arena.allocator(), &args);
 
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_file = std.Io.File.stdout().writerStreaming(init.io, &stdout_buffer);
+    const stdout = &stdout_file.interface;
+
     switch (args) {
-        .parsed => |result| try printRootOnly(init, result),
+        .parsed => |result| try printRootOnly(stdout, result),
         .help => {
             const text = try Cli.renderHelp(init.arena.allocator());
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
+            try stdout.writeAll(text);
         },
         .version => {
             const text = try Cli.renderVersion(init.arena.allocator());
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
+            try stdout.writeAll(text);
         },
         .subcommand => |node| switch (node.command) {
-            .remote => |remote_result| try printRemote(init, node.parsed, remote_result),
-            .status => |status_result| try printStatus(init, node.parsed, status_result),
+            .remote => |remote_result| try printRemote(init, stdout, node.parsed, remote_result),
+            .status => |status_result| try printStatus(init, stdout, node.parsed, status_result),
         },
     }
+
+    try stdout.flush();
 }
 
-fn printRootOnly(init: std.process.Init, result: Cli.Parsed) !void {
-    try printRootOptions(init, result);
-    try std.Io.File.stdout().writeStreamingAll(init.io, "command=(none)\n");
+fn printRootOnly(writer: *std.Io.Writer, result: Cli.Parsed) !void {
+    try printRootOptions(writer, result);
+    try writer.writeAll("command=(none)\n");
 }
 
-fn printRootOptions(init: std.process.Init, result: Cli.Parsed) !void {
-    const text = try std.fmt.allocPrint(init.arena.allocator(),
+fn printRootOptions(writer: *std.Io.Writer, result: Cli.Parsed) !void {
+    try writer.print(
         \\top_verbose={d}
         \\work_tree={s}
         \\
@@ -130,37 +135,41 @@ fn printRootOptions(init: std.process.Init, result: Cli.Parsed) !void {
         result.verbose,
         result.work_tree orelse "(current)",
     });
-    try std.Io.File.stdout().writeStreamingAll(init.io, text);
 }
 
-fn printRemote(init: std.process.Init, root: Cli.Parsed, result: Remote.Result) !void {
+fn printRemote(init: std.process.Init, writer: *std.Io.Writer, root: Cli.Parsed, result: Remote.Result) !void {
     switch (result) {
         .parsed => |parsed| {
-            try printRootOptions(init, root);
-            const text = try std.fmt.allocPrint(init.arena.allocator(),
+            try printRootOptions(writer, root);
+            try writer.print(
                 \\command=remote
                 \\remote_verbose={d}
                 \\
             , .{parsed.verbose});
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
         },
         .help => {
             const text = try Remote.renderHelp(init.arena.allocator());
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
+            try writer.writeAll(text);
         },
         .version => unreachable,
         .subcommand => |node| switch (node.command) {
-            .add => |add_result| try printRemoteAdd(init, root, node.parsed, add_result),
-            .remove => |remove_result| try printRemoteRemove(init, root, node.parsed, remove_result),
+            .add => |add_result| try printRemoteAdd(init, writer, root, node.parsed, add_result),
+            .remove => |remove_result| try printRemoteRemove(init, writer, root, node.parsed, remove_result),
         },
     }
 }
 
-fn printRemoteAdd(init: std.process.Init, root: Cli.Parsed, remote: Remote.Parsed, result: RemoteAdd.Result) !void {
+fn printRemoteAdd(
+    init: std.process.Init,
+    writer: *std.Io.Writer,
+    root: Cli.Parsed,
+    remote: Remote.Parsed,
+    result: RemoteAdd.Result,
+) !void {
     switch (result) {
         .parsed => |parsed| {
-            try printRootOptions(init, root);
-            const text = try std.fmt.allocPrint(init.arena.allocator(),
+            try printRootOptions(writer, root);
+            try writer.print(
                 \\remote_verbose={d}
                 \\command=remote add
                 \\fetch={}
@@ -173,21 +182,26 @@ fn printRemoteAdd(init: std.process.Init, root: Cli.Parsed, remote: Remote.Parse
                 parsed.name,
                 parsed.url,
             });
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
         },
         .help => {
             const text = try RemoteAdd.renderHelp(init.arena.allocator());
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
+            try writer.writeAll(text);
         },
         .version => unreachable,
     }
 }
 
-fn printRemoteRemove(init: std.process.Init, root: Cli.Parsed, remote: Remote.Parsed, result: RemoteRemove.Result) !void {
+fn printRemoteRemove(
+    init: std.process.Init,
+    writer: *std.Io.Writer,
+    root: Cli.Parsed,
+    remote: Remote.Parsed,
+    result: RemoteRemove.Result,
+) !void {
     switch (result) {
         .parsed => |parsed| {
-            try printRootOptions(init, root);
-            const text = try std.fmt.allocPrint(init.arena.allocator(),
+            try printRootOptions(writer, root);
+            try writer.print(
                 \\remote_verbose={d}
                 \\command=remote remove
                 \\name={s}
@@ -196,30 +210,28 @@ fn printRemoteRemove(init: std.process.Init, root: Cli.Parsed, remote: Remote.Pa
                 remote.verbose,
                 parsed.name,
             });
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
         },
         .help => {
             const text = try RemoteRemove.renderHelp(init.arena.allocator());
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
+            try writer.writeAll(text);
         },
         .version => unreachable,
     }
 }
 
-fn printStatus(init: std.process.Init, root: Cli.Parsed, result: Status.Result) !void {
+fn printStatus(init: std.process.Init, writer: *std.Io.Writer, root: Cli.Parsed, result: Status.Result) !void {
     switch (result) {
         .parsed => |parsed| {
-            try printRootOptions(init, root);
-            const text = try std.fmt.allocPrint(init.arena.allocator(),
+            try printRootOptions(writer, root);
+            try writer.print(
                 \\command=status
                 \\short={}
                 \\
             , .{parsed.short});
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
         },
         .help => {
             const text = try Status.renderHelp(init.arena.allocator());
-            try std.Io.File.stdout().writeStreamingAll(init.io, text);
+            try writer.writeAll(text);
         },
         .version => unreachable,
     }
