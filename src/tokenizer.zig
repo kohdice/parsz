@@ -23,21 +23,7 @@ pub const Token = union(enum) {
     },
 };
 
-pub fn tokenize(
-    allocator: std.mem.Allocator,
-    argv: []const []const u8,
-    argv_index_base: usize,
-) std.mem.Allocator.Error![]Token {
-    const tokens = try allocator.alloc(Token, argv.len);
-
-    for (argv, 0..) |raw, argv_index| {
-        tokens[argv_index] = tokenizeArg(argv_index_base + argv_index, raw);
-    }
-
-    return tokens;
-}
-
-fn tokenizeArg(argv_index: usize, raw: []const u8) Token {
+pub fn tokenize(argv_index: usize, raw: []const u8) Token {
     if (std.mem.eql(u8, raw, "--")) {
         return .{
             .end_of_options = .{

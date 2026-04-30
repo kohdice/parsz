@@ -6,7 +6,6 @@ const tokenizer = @import("tokenizer.zig");
 
 const ArgSpec = schema.ArgSpec;
 const Token = tokenizer.Token;
-const tokenize = tokenizer.tokenize;
 const ParseError = diagnostics.ParseError;
 const ParseOptions = diagnostics.ParseOptions;
 
@@ -53,46 +52,37 @@ pub fn parseMatches(
 ) ParseError!MatchParseResult {
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
     const has_subcommands = @typeInfo(@TypeOf(subcommands)).@"struct".fields.len > 0;
-    const tokens = tokenize(allocator, user_args, argv_index_base) catch return error.OutOfMemory;
-    defer allocator.free(tokens);
 
     var matches: std.ArrayList(Match) = .empty;
     errdefer matches.deinit(allocator);
 
-    const occurrence_counts = allocator.alloc(usize, fields.len) catch return error.OutOfMemory;
-    defer allocator.free(occurrence_counts);
-    @memset(occurrence_counts, 0);
+    var occurrence_counts = [_]usize{0} ** fields.len;
 
     var next_operand_ordinal: usize = 0;
     var token_index: usize = 0;
 
-    while (token_index < tokens.len) {
-        switch (tokens[token_index]) {
+    while (token_index < user_args.len) {
+        const token = tokenizer.tokenize(argv_index_base + token_index, user_args[token_index]);
+        switch (token) {
             .long_option => |payload| {
-                if (try appendLongOptionMatch(args, long_options, allocator, &matches, occurrence_counts, payload, user_args, &token_index, options)) |control| {
+                if (try appendLongOptionMatch(args, long_options, allocator, &matches, occurrence_counts[0..], payload, user_args, &token_index, options)) |control| {
                     matches.deinit(allocator);
                     return .{ .control = control };
                 }
             },
             .short_option => |payload| {
-                try appendShortOptionMatch(args, allocator, &matches, occurrence_counts, payload, user_args, &token_index, options);
+                try appendShortOptionMatch(args, allocator, &matches, occurrence_counts[0..], payload, user_args, &token_index, options);
             },
             .end_of_options => {
                 token_index += 1;
-                while (token_index < tokens.len) : (token_index += 1) {
-                    const source_argv_index, const source_raw = switch (tokens[token_index]) {
-                        .long_option => |payload| .{ payload.argv_index, payload.raw },
-                        .short_option => |payload| .{ payload.argv_index, payload.raw },
-                        .end_of_options => |payload| .{ payload.argv_index, payload.raw },
-                        .operand => |payload| .{ payload.argv_index, payload.raw },
-                    };
+                while (token_index < user_args.len) : (token_index += 1) {
                     try appendOperandMatch(
                         args,
                         allocator,
                         &matches,
-                        occurrence_counts,
-                        source_argv_index,
-                        source_raw,
+                        occurrence_counts[0..],
+                        argv_index_base + token_index,
+                        user_args[token_index],
                         &next_operand_ordinal,
                         options,
                     );
@@ -122,7 +112,7 @@ pub fn parseMatches(
                     args,
                     allocator,
                     &matches,
-                    occurrence_counts,
+                    occurrence_counts[0..],
                     payload.argv_index,
                     payload.raw,
                     &next_operand_ordinal,

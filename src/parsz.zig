@@ -429,102 +429,81 @@ test "runtime api: exposes result deinit as no-op for borrowed-only schemas" {
     Cli.deinit(std.testing.allocator, &result);
 }
 
-test "tokenizer: treats empty argv as empty token stream" {
-    const tokens = try tokenizer.tokenize(std.testing.allocator, &.{}, 0);
-    defer std.testing.allocator.free(tokens);
+test "runtime api: parses empty input without allocation" {
+    const Cli = Command(.{
+        .name = "app",
+        .args = .{},
+    });
 
-    try std.testing.expectEqual(@as(usize, 0), tokens.len);
+    const argv = [_][]const u8{"app"};
+    var result = try Cli.parse(std.testing.failing_allocator, argv[0..], .{});
+    Cli.deinit(std.testing.failing_allocator, &result);
+}
+
+test "runtime api: parses standard help without allocation" {
+    const Cli = Command(.{
+        .name = "app",
+        .args = .{},
+    });
+
+    const argv = [_][]const u8{ "app", "--help" };
+    var result = try Cli.parse(std.testing.failing_allocator, argv[0..], .{});
+    Cli.deinit(std.testing.failing_allocator, &result);
+
+    switch (result) {
+        .help => {},
+        else => return error.ExpectedHelpResult,
+    }
 }
 
 test "tokenizer: classifies operands" {
-    const argv = [_][]const u8{"file.txt"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectOperandToken(tokens[0], 0, "file.txt");
+    const token = tokenizer.tokenize(0, "file.txt");
+    try expectOperandToken(token, 0, "file.txt");
 }
 
 test "tokenizer: offsets token indexes by argv base" {
-    const argv = [_][]const u8{"file.txt"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 3);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectOperandToken(tokens[0], 3, "file.txt");
+    const token = tokenizer.tokenize(3, "file.txt");
+    try expectOperandToken(token, 3, "file.txt");
 }
 
 test "tokenizer: classifies end of options marker" {
-    const argv = [_][]const u8{"--"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectEndOfOptionsToken(tokens[0], 0, "--");
+    const token = tokenizer.tokenize(0, "--");
+    try expectEndOfOptionsToken(token, 0, "--");
 }
 
-test "tokenizer: does not force tokens after end marker to operands" {
-    const argv = [_][]const u8{ "--", "--verbose" };
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 2), tokens.len);
-    try expectEndOfOptionsToken(tokens[0], 0, "--");
-    try expectLongOptionToken(tokens[1], 1, "--verbose", "verbose", null);
+test "tokenizer: classifies each argument independently" {
+    try expectEndOfOptionsToken(tokenizer.tokenize(0, "--"), 0, "--");
+    try expectLongOptionToken(tokenizer.tokenize(1, "--verbose"), 1, "--verbose", "verbose", null);
 }
 
 test "tokenizer: classifies long option without value" {
-    const argv = [_][]const u8{"--verbose"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectLongOptionToken(tokens[0], 0, "--verbose", "verbose", null);
+    const token = tokenizer.tokenize(0, "--verbose");
+    try expectLongOptionToken(token, 0, "--verbose", "verbose", null);
 }
 
 test "tokenizer: classifies long option with inline value" {
-    const argv = [_][]const u8{"--output=path"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectLongOptionToken(tokens[0], 0, "--output=path", "output", "path");
+    const token = tokenizer.tokenize(0, "--output=path");
+    try expectLongOptionToken(token, 0, "--output=path", "output", "path");
 }
 
 test "tokenizer: preserves empty long inline value" {
-    const argv = [_][]const u8{"--output="};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectLongOptionToken(tokens[0], 0, "--output=", "output", "");
+    const token = tokenizer.tokenize(0, "--output=");
+    try expectLongOptionToken(token, 0, "--output=", "output", "");
 }
 
 test "tokenizer: classifies single hyphen as operand" {
-    const argv = [_][]const u8{"-"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectOperandToken(tokens[0], 0, "-");
+    const token = tokenizer.tokenize(0, "-");
+    try expectOperandToken(token, 0, "-");
 }
 
 test "tokenizer: preserves short option suffix" {
-    const argv = [_][]const u8{"-abc"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectShortOptionToken(tokens[0], 0, "-abc", 'a', "bc");
+    const token = tokenizer.tokenize(0, "-abc");
+    try expectShortOptionToken(token, 0, "-abc", 'a', "bc");
 }
 
 test "tokenizer: preserves attached short value candidate" {
-    const argv = [_][]const u8{"-Iinclude"};
-    const tokens = try tokenizer.tokenize(std.testing.allocator, argv[0..], 0);
-    defer std.testing.allocator.free(tokens);
-
-    try std.testing.expectEqual(@as(usize, 1), tokens.len);
-    try expectShortOptionToken(tokens[0], 0, "-Iinclude", 'I', "include");
+    const token = tokenizer.tokenize(0, "-Iinclude");
+    try expectShortOptionToken(token, 0, "-Iinclude", 'I', "include");
 }
 
 test "parser: parses one long flag occurrence" {
