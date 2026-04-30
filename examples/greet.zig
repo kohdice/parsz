@@ -44,13 +44,10 @@ pub fn main(init: std.process.Init) !void {
     switch (args) {
         .parsed => |result| {
             if (result.shout) {
-                const line = try std.fmt.allocPrint(
-                    init.arena.allocator(),
-                    "{s}, {s}!\n",
-                    .{ result.greeting, result.name },
-                );
-                _ = std.ascii.upperString(line, line);
-                try stdout.writeAll(line);
+                try writeAsciiUpper(stdout, result.greeting);
+                try stdout.writeAll(", ");
+                try writeAsciiUpper(stdout, result.name);
+                try stdout.writeAll("!\n");
             } else {
                 try stdout.print("{s}, {s}!\n", .{ result.greeting, result.name });
             }
@@ -66,4 +63,16 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try stdout.flush();
+}
+
+fn writeAsciiUpper(writer: *std.Io.Writer, bytes: []const u8) std.Io.Writer.Error!void {
+    var buffer: [256]u8 = undefined;
+    var remaining = bytes;
+
+    while (remaining.len > 0) {
+        const chunk_len = @min(buffer.len, remaining.len);
+        const chunk = std.ascii.upperString(&buffer, remaining[0..chunk_len]);
+        try writer.writeAll(chunk);
+        remaining = remaining[chunk_len..];
+    }
 }
