@@ -106,6 +106,10 @@ const fixtures = [_]Fixture{
         .path = "test/compile_errors/required_operand_after_variadic.zig",
         .expected = "operand after a variadic operand",
     },
+    .{
+        .path = "test/compile_errors/subcommand_with_operand.zig",
+        .expected = "cannot be an operand because command declares subcommands",
+    },
 };
 
 pub fn main(init: std.process.Init) !void {
