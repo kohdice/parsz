@@ -133,38 +133,40 @@ pub fn main(init: std.process.Init) !void {
             "-Mparsz=src/parsz.zig",
         };
 
-        const result = try std.process.run(init.gpa, init.io, .{
-            .argv = &command,
-            .stdout_limit = .limited(1024 * 1024),
-            .stderr_limit = .limited(1024 * 1024),
-        });
-        defer {
-            init.gpa.free(result.stdout);
-            init.gpa.free(result.stderr);
-        }
+        {
+            const result = try std.process.run(init.gpa, init.io, .{
+                .argv = &command,
+                .stdout_limit = .limited(1024 * 1024),
+                .stderr_limit = .limited(1024 * 1024),
+            });
+            defer {
+                init.gpa.free(result.stdout);
+                init.gpa.free(result.stderr);
+            }
 
-        switch (result.term) {
-            .exited => |code| {
-                if (code == 0) {
-                    std.debug.print("compile-error fixture unexpectedly compiled: {s}\n", .{fixture.path});
+            switch (result.term) {
+                .exited => |code| {
+                    if (code == 0) {
+                        std.debug.print("compile-error fixture unexpectedly compiled: {s}\n", .{fixture.path});
+                        failed = true;
+                        continue;
+                    }
+                },
+                else => {
+                    std.debug.print("compile-error fixture ended abnormally: {s}\n", .{fixture.path});
                     failed = true;
                     continue;
-                }
-            },
-            else => {
-                std.debug.print("compile-error fixture ended abnormally: {s}\n", .{fixture.path});
-                failed = true;
-                continue;
-            },
-        }
+                },
+            }
 
-        if (std.mem.find(u8, result.stderr, fixture.expected) == null) {
-            std.debug.print("compile-error fixture did not contain expected text: {s}\nexpected: {s}\nstderr:\n{s}\n", .{
-                fixture.path,
-                fixture.expected,
-                result.stderr,
-            });
-            failed = true;
+            if (std.mem.find(u8, result.stderr, fixture.expected) == null) {
+                std.debug.print("compile-error fixture did not contain expected text: {s}\nexpected: {s}\nstderr:\n{s}\n", .{
+                    fixture.path,
+                    fixture.expected,
+                    result.stderr,
+                });
+                failed = true;
+            }
         }
     }
 
