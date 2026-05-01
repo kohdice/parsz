@@ -1,94 +1,55 @@
 const std = @import("std");
 const parsz = @import("parsz");
 
-const RemoteAdd = parsz.Command(.{
+const Add = parsz.Command(.{
     .name = "add",
-    .about = "Add a named remote",
+    .about = "Add two numbers",
     .args = .{
-        .fetch = parsz.flag(.{
-            .short = 'f',
-            .long = "fetch",
-            .help = "Fetch from the remote after adding it",
-        }),
-        .name = parsz.operand([]const u8, .{
-            .value_name = "NAME",
+        .left = parsz.operand(i64, .{
+            .value_name = "LEFT",
             .required = true,
-            .help = "Remote name",
+            .help = "Left-hand number",
         }),
-        .url = parsz.operand([]const u8, .{
-            .value_name = "URL",
+        .right = parsz.operand(i64, .{
+            .value_name = "RIGHT",
             .required = true,
-            .help = "Remote URL",
+            .help = "Right-hand number",
         }),
     },
 });
 
-const RemoteRemove = parsz.Command(.{
-    .name = "remove",
-    .about = "Remove a named remote",
+const Repeat = parsz.Command(.{
+    .name = "repeat",
+    .about = "Print a word more than once",
     .args = .{
-        .name = parsz.operand([]const u8, .{
-            .value_name = "NAME",
+        .count = parsz.option(u8, .{
+            .short = 'n',
+            .long = "count",
+            .value_name = "N",
+            .default = 2,
+            .help = "Number of times to print the word",
+        }),
+        .word = parsz.operand([]const u8, .{
+            .value_name = "WORD",
             .required = true,
-            .help = "Remote name",
-        }),
-    },
-});
-
-const Remote = parsz.Command(.{
-    .name = "remote",
-    .about = "Manage remote repositories",
-    .args = .{
-        .verbose = parsz.flag(.{
-            .short = 'v',
-            .long = "verbose",
-            .action = .count,
-            .help = "Print more remote command details",
-        }),
-    },
-    .subcommands = .{
-        .add = RemoteAdd,
-        .remove = RemoteRemove,
-    },
-});
-
-const Status = parsz.Command(.{
-    .name = "status",
-    .about = "Show working tree status",
-    .args = .{
-        .short = parsz.flag(.{
-            .short = 's',
-            .long = "short",
-            .help = "Print status in short format",
+            .help = "Word to print",
         }),
     },
 });
 
 const Cli = parsz.Command(.{
-    .name = "mini-git",
-    .about = "Demonstrate nested subcommand parsing",
-    .version = parsz.version(.{ .number = "1.2.3", .details =
+    .name = "toolbox",
+    .about = "Demonstrate simple subcommand parsing",
+    .version = parsz.version(.{ .number = "0.1.0", .details =
         \\Copyright (C) 2026 parsz contributors
         \\License MIT: MIT License <https://opensource.org/licenses/MIT>
         \\This is free software: you are free to change and redistribute it.
         \\There is NO WARRANTY, to the extent permitted by law.
     }),
-    .args = .{
-        .verbose = parsz.flag(.{
-            .short = 'v',
-            .long = "verbose",
-            .action = .count,
-            .help = "Print more top-level details",
-        }),
-        .work_tree = parsz.option([]const u8, .{
-            .long = "work-tree",
-            .value_name = "PATH",
-            .help = "Use PATH as the working tree",
-        }),
-    },
+    .args = .{},
     .subcommands = .{
-        .remote = Remote,
-        .status = Status,
+        .add = Add,
+        .repeat = Repeat,
     },
 });
 
@@ -103,136 +64,24 @@ pub fn main(init: std.process.Init) !void {
     const stdout = &stdout_file.interface;
 
     switch (args) {
-        .parsed => |result| try printRootOnly(stdout, result),
-        .help => {
-            const text = try Cli.renderHelp(init.arena.allocator());
-            try stdout.writeAll(text);
-        },
-        .version => {
-            const text = try Cli.renderVersion(init.arena.allocator());
-            try stdout.writeAll(text);
-        },
+        .parsed => try Cli.writeHelp(stdout),
+        .help => try Cli.writeHelp(stdout),
+        .version => try Cli.writeVersion(stdout),
         .subcommand => |node| switch (node.command) {
-            .remote => |remote_result| try printRemote(init, stdout, node.parsed, remote_result),
-            .status => |status_result| try printStatus(init, stdout, node.parsed, status_result),
+            .add => |add_result| switch (add_result) {
+                .parsed => |result| try stdout.print("{d}\n", .{result.left + result.right}),
+                .help => try Add.writeHelp(stdout),
+            },
+            .repeat => |repeat_result| switch (repeat_result) {
+                .parsed => |result| {
+                    for (0..result.count) |_| {
+                        try stdout.print("{s}\n", .{result.word});
+                    }
+                },
+                .help => try Repeat.writeHelp(stdout),
+            },
         },
     }
 
     try stdout.flush();
-}
-
-fn printRootOnly(writer: *std.Io.Writer, result: Cli.Parsed) !void {
-    try printRootOptions(writer, result);
-    try writer.writeAll("command=(none)\n");
-}
-
-fn printRootOptions(writer: *std.Io.Writer, result: Cli.Parsed) !void {
-    try writer.print(
-        \\top_verbose={d}
-        \\work_tree={s}
-        \\
-    , .{
-        result.verbose,
-        result.work_tree orelse "(current)",
-    });
-}
-
-fn printRemote(init: std.process.Init, writer: *std.Io.Writer, root: Cli.Parsed, result: Remote.Result) !void {
-    switch (result) {
-        .parsed => |parsed| {
-            try printRootOptions(writer, root);
-            try writer.print(
-                \\command=remote
-                \\remote_verbose={d}
-                \\
-            , .{parsed.verbose});
-        },
-        .help => {
-            const text = try Remote.renderHelp(init.arena.allocator());
-            try writer.writeAll(text);
-        },
-        .version => unreachable,
-        .subcommand => |node| switch (node.command) {
-            .add => |add_result| try printRemoteAdd(init, writer, root, node.parsed, add_result),
-            .remove => |remove_result| try printRemoteRemove(init, writer, root, node.parsed, remove_result),
-        },
-    }
-}
-
-fn printRemoteAdd(
-    init: std.process.Init,
-    writer: *std.Io.Writer,
-    root: Cli.Parsed,
-    remote: Remote.Parsed,
-    result: RemoteAdd.Result,
-) !void {
-    switch (result) {
-        .parsed => |parsed| {
-            try printRootOptions(writer, root);
-            try writer.print(
-                \\remote_verbose={d}
-                \\command=remote add
-                \\fetch={}
-                \\name={s}
-                \\url={s}
-                \\
-            , .{
-                remote.verbose,
-                parsed.fetch,
-                parsed.name,
-                parsed.url,
-            });
-        },
-        .help => {
-            const text = try RemoteAdd.renderHelp(init.arena.allocator());
-            try writer.writeAll(text);
-        },
-        .version => unreachable,
-    }
-}
-
-fn printRemoteRemove(
-    init: std.process.Init,
-    writer: *std.Io.Writer,
-    root: Cli.Parsed,
-    remote: Remote.Parsed,
-    result: RemoteRemove.Result,
-) !void {
-    switch (result) {
-        .parsed => |parsed| {
-            try printRootOptions(writer, root);
-            try writer.print(
-                \\remote_verbose={d}
-                \\command=remote remove
-                \\name={s}
-                \\
-            , .{
-                remote.verbose,
-                parsed.name,
-            });
-        },
-        .help => {
-            const text = try RemoteRemove.renderHelp(init.arena.allocator());
-            try writer.writeAll(text);
-        },
-        .version => unreachable,
-    }
-}
-
-fn printStatus(init: std.process.Init, writer: *std.Io.Writer, root: Cli.Parsed, result: Status.Result) !void {
-    switch (result) {
-        .parsed => |parsed| {
-            try printRootOptions(writer, root);
-            try writer.print(
-                \\command=status
-                \\short={}
-                \\
-            , .{parsed.short});
-        },
-        .help => {
-            const text = try Status.renderHelp(init.arena.allocator());
-            try writer.writeAll(text);
-        },
-        .version => unreachable,
-    }
 }
