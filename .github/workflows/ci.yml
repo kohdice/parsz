@@ -19,14 +19,20 @@ jobs:
         with:
           extra-conf: |
             experimental-features = nix-command flakes
-      - name: Cache Nix store
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+      - name: Restore Nix store
+        uses: nix-community/cache-nix-action/restore@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
         with:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
-          gc-max-store-size-linux: 3G
       - name: Check formatting
         run: nix develop -c zig fmt --check .
+      - name: Save Nix store
+        uses: nix-community/cache-nix-action/save@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        env:
+          TAR_OPTIONS: --hard-dereference
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          gc-max-store-size-linux: 3G
   build-and-test:
     name: Build & Test (${{ matrix.os }})
     needs: fmt
@@ -43,12 +49,18 @@ jobs:
         with:
           extra-conf: |
             experimental-features = nix-command flakes
-      - name: Cache Nix store
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+      - name: Restore Nix store
+        uses: nix-community/cache-nix-action/restore@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
         with:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
-          gc-max-store-size-linux: 3G
-          gc-max-store-size-macos: 3G
       - name: Run tests
         run: nix develop -c zig build test
+      - name: Save Nix store
+        uses: nix-community/cache-nix-action/save@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        env:
+          TAR_OPTIONS: ${{ runner.os == 'Linux' && '--hard-dereference' || '' }}
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          gc-max-store-size-linux: 3G
+          gc-max-store-size-macos: 3G
