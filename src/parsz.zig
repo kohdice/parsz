@@ -18,6 +18,43 @@ pub const option = schema.option;
 pub const operand = schema.operand;
 pub const version = schema.version;
 
+fn hasAppendAction(comptime args: anytype) bool {
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+    inline for (fields) |field_info| {
+        if (@field(args, field_info.name).action == .append) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn buildAppendBuffersType(comptime args: anytype) type {
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+    comptime {
+        var names: [fields.len][:0]const u8 = undefined;
+        var types: [fields.len]type = undefined;
+        const attrs: [fields.len]std.builtin.Type.StructField.Attributes = @splat(.{});
+
+        for (fields, 0..) |field_info, index| {
+            const spec = @field(args, field_info.name);
+            names[index] = field_info.name;
+            types[index] = appendBufferFieldType(spec);
+        }
+
+        return @Struct(.auto, null, &names, &types, &attrs);
+    }
+}
+
+fn appendBufferFieldType(comptime spec: schema.ArgSpec) type {
+    return switch (spec.action) {
+        .append => []spec.value_type,
+        .set_true, .count, .set => void,
+    };
+}
+
 pub fn Command(comptime declaration: anytype) type {
     schema.validateCommandDeclaration(declaration);
 
@@ -27,12 +64,17 @@ pub fn Command(comptime declaration: anytype) type {
     const has_subcommands = @typeInfo(@TypeOf(subcommands)).@"struct".fields.len > 0;
     const command_about: ?[]const u8 = if (@hasField(Declaration, "about")) declaration.about else null;
     const args = declaration.args;
+    const has_append_args = hasAppendAction(args);
     const standard_controls: schema.StandardControls = .{
         .help = true,
         .version = has_version,
     };
     const long_options = schema.buildLongOptions(args, standard_controls);
+    const long_option_map = schema.buildLongOptionMap(&long_options);
+    const short_options = schema.buildShortOptions(args);
+    const operand_arg_indexes = schema.buildOperandArgIndexes(args);
     const parsed_type = schema.buildResultType(args);
+    const append_buffers_type = buildAppendBuffersType(args);
     const subcommand_result_type = if (has_subcommands) schema.buildSubcommandResultType(subcommands) else void;
     const subcommand_type = if (has_subcommands) struct {
         parsed: parsed_type,
@@ -42,18 +84,29 @@ pub fn Command(comptime declaration: anytype) type {
     return struct {
         pub const is_parsz_command = true;
         pub const name = declaration.name;
+        pub const about = command_about;
         pub const Parsed = parsed_type;
+        const AppendBuffers = append_buffers_type;
         pub const SubcommandResult = subcommand_result_type;
         pub const Subcommand = subcommand_type;
-        pub const Result = if (has_subcommands) union(enum) {
+        pub const Result = if (has_subcommands)
+            if (has_version) union(enum) {
+                parsed: Parsed,
+                help,
+                version,
+                subcommand: Subcommand,
+            } else union(enum) {
+                parsed: Parsed,
+                help,
+                subcommand: Subcommand,
+            }
+        else if (has_version) union(enum) {
             parsed: Parsed,
             help,
             version,
-            subcommand: Subcommand,
         } else union(enum) {
             parsed: Parsed,
             help,
-            version,
         };
 
         pub fn parse(allocator: std.mem.Allocator, argv: []const []const u8, options: ParseOptions) ParseError!Result {
@@ -69,35 +122,185 @@ pub fn Command(comptime declaration: anytype) type {
             argv_index_base: usize,
             options: ParseOptions,
         ) ParseError!Result {
-            const match_result = try parser.parseMatches(
+            if (comptime !has_append_args) {
+                return parseUserArgsNoAppend(allocator, user_args, argv_index_base, options);
+            }
+
+            return parseUserArgsAppend(allocator, user_args, argv_index_base, options);
+        }
+
+        const NoAppendSink = struct {
+            parsed: *Parsed,
+            seen: []bool,
+
+            pub fn emit(
+                self: *@This(),
+                comptime arg_index: usize,
+                comptime arg_name: []const u8,
+                comptime spec: schema.ArgSpec,
+                match: parser.Match,
+                options: ParseOptions,
+            ) ParseError!void {
+                try semantic.applyNonAppendMatch(arg_name, spec, match, self.parsed, options);
+                self.seen[arg_index] = true;
+            }
+        };
+
+        const AppendCountSink = struct {
+            counts: []usize,
+
+            pub fn emit(
+                self: *@This(),
+                comptime arg_index: usize,
+                comptime arg_name: []const u8,
+                comptime spec: schema.ArgSpec,
+                match: parser.Match,
+                options: ParseOptions,
+            ) ParseError!void {
+                _ = arg_name;
+                _ = match;
+                _ = options;
+
+                if (comptime spec.action == .append) {
+                    self.counts[arg_index] += 1;
+                }
+            }
+        };
+
+        const AppendSink = struct {
+            parsed: *Parsed,
+            seen: []bool,
+            append_buffers: *AppendBuffers,
+            append_indices: []usize,
+
+            pub fn emit(
+                self: *@This(),
+                comptime arg_index: usize,
+                comptime arg_name: []const u8,
+                comptime spec: schema.ArgSpec,
+                match: parser.Match,
+                options: ParseOptions,
+            ) ParseError!void {
+                if (comptime spec.action == .append) {
+                    const append_index = self.append_indices[arg_index];
+                    try semantic.applyAppendMatch(
+                        arg_name,
+                        spec,
+                        match,
+                        @field(self.append_buffers.*, arg_name),
+                        append_index,
+                        options,
+                    );
+                    self.append_indices[arg_index] = append_index + 1;
+                } else {
+                    try semantic.applyNonAppendMatch(arg_name, spec, match, self.parsed, options);
+                }
+
+                self.seen[arg_index] = true;
+            }
+
+            fn finish(self: *@This()) void {
+                const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+                inline for (fields) |field_info| {
+                    const spec = @field(args, field_info.name);
+                    if (comptime spec.action == .append) {
+                        @field(self.parsed.*, field_info.name) = @field(self.append_buffers.*, field_info.name);
+                        @field(self.append_buffers.*, field_info.name) = &.{};
+                    }
+                }
+            }
+        };
+
+        fn initAppendBuffers(allocator: std.mem.Allocator, counts: []const usize) ParseError!AppendBuffers {
+            const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+            var append_buffers: AppendBuffers = undefined;
+            inline for (fields) |field_info| {
+                const spec = @field(args, field_info.name);
+                @field(append_buffers, field_info.name) = if (comptime spec.action == .append) &.{} else {};
+            }
+            errdefer deinitAppendBuffers(allocator, &append_buffers);
+
+            inline for (fields, 0..) |field_info, arg_index| {
+                const spec = @field(args, field_info.name);
+                if (comptime spec.action == .append) {
+                    const count = counts[arg_index];
+                    @field(append_buffers, field_info.name) = if (count == 0)
+                        &.{}
+                    else
+                        allocator.alloc(spec.value_type, count) catch return error.OutOfMemory;
+                }
+            }
+
+            return append_buffers;
+        }
+
+        fn deinitAppendBuffers(allocator: std.mem.Allocator, append_buffers: *AppendBuffers) void {
+            const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+            inline for (fields) |field_info| {
+                const spec = @field(args, field_info.name);
+                if (comptime spec.action == .append) {
+                    const values = @field(append_buffers.*, field_info.name);
+                    if (values.len > 0) {
+                        allocator.free(values);
+                    }
+                    @field(append_buffers.*, field_info.name) = &.{};
+                }
+            }
+        }
+
+        fn parseUserArgsNoAppend(
+            allocator: std.mem.Allocator,
+            user_args: []const []const u8,
+            argv_index_base: usize,
+            options: ParseOptions,
+        ) ParseError!Result {
+            const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+            var parsed: Parsed = undefined;
+            schema.initializeResultDefaults(args, &parsed);
+
+            var seen = [_]bool{false} ** fields.len;
+            var sink = NoAppendSink{
+                .parsed = &parsed,
+                .seen = seen[0..],
+            };
+
+            const outcome = try parser.parseInto(
                 args,
                 &long_options,
+                long_option_map,
+                &short_options,
+                &operand_arg_indexes,
                 subcommands,
-                allocator,
                 user_args,
                 argv_index_base,
                 options,
+                &sink,
             );
 
-            switch (match_result) {
-                .control => |control| return switch (control) {
-                    .help => .help,
-                    .version => .version,
+            switch (outcome) {
+                .complete => {
+                    try semantic.validateRequiredSeen(args, seen[0..], options);
+                    return .{ .parsed = parsed };
                 },
-                .matches => |matches| {
-                    defer allocator.free(matches);
-                    return .{ .parsed = try parseMatched(allocator, matches, options) };
-                },
+                .control => |control| return controlResult(control),
                 .subcommand => |invocation| {
                     if (comptime has_subcommands) {
-                        defer allocator.free(invocation.matches);
-
-                        var parsed = try parseMatched(allocator, invocation.matches, options);
-                        errdefer deinitParsed(allocator, &parsed);
+                        try semantic.validateRequiredSeen(args, seen[0..], options);
 
                         return .{ .subcommand = .{
                             .parsed = parsed,
-                            .command = try parseSubcommandInvocation(allocator, user_args, options, invocation),
+                            .command = try parseSubcommandStart(
+                                allocator,
+                                user_args,
+                                options,
+                                invocation.subcommand_index,
+                                invocation.argv_index,
+                                invocation.user_arg_index,
+                            ),
                         } };
                     } else {
                         unreachable;
@@ -106,33 +309,127 @@ pub fn Command(comptime declaration: anytype) type {
             }
         }
 
-        fn parseMatched(
+        fn parseUserArgsAppend(
             allocator: std.mem.Allocator,
-            matches: []const parser.Match,
+            user_args: []const []const u8,
+            argv_index_base: usize,
             options: ParseOptions,
-        ) ParseError!Parsed {
+        ) ParseError!Result {
+            const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+            var append_counts = [_]usize{0} ** fields.len;
+            var count_sink = AppendCountSink{
+                .counts = append_counts[0..],
+            };
+
+            const counted_outcome = try parser.parseInto(
+                args,
+                &long_options,
+                long_option_map,
+                &short_options,
+                &operand_arg_indexes,
+                subcommands,
+                user_args,
+                argv_index_base,
+                options,
+                &count_sink,
+            );
+
+            if (counted_outcome == .control) {
+                return controlResult(counted_outcome.control);
+            }
+
             var parsed: Parsed = undefined;
             schema.initializeResultDefaults(args, &parsed);
             errdefer deinitParsed(allocator, &parsed);
 
-            try semantic.applyMatches(args, allocator, matches, &parsed, options);
-            try semantic.validateRequiredMatches(args, matches, options);
-            return parsed;
+            var append_buffers = try initAppendBuffers(allocator, append_counts[0..]);
+            defer deinitAppendBuffers(allocator, &append_buffers);
+
+            var seen = [_]bool{false} ** fields.len;
+            var append_indices = [_]usize{0} ** fields.len;
+            var sink = AppendSink{
+                .parsed = &parsed,
+                .seen = seen[0..],
+                .append_buffers = &append_buffers,
+                .append_indices = append_indices[0..],
+            };
+
+            const outcome = try parser.parseInto(
+                args,
+                &long_options,
+                long_option_map,
+                &short_options,
+                &operand_arg_indexes,
+                subcommands,
+                user_args,
+                argv_index_base,
+                options,
+                &sink,
+            );
+
+            switch (outcome) {
+                .complete => {
+                    try semantic.validateRequiredSeen(args, seen[0..], options);
+                    sink.finish();
+                    return .{ .parsed = parsed };
+                },
+                .control => |control| return controlResult(control),
+                .subcommand => |invocation| {
+                    if (comptime has_subcommands) {
+                        try semantic.validateRequiredSeen(args, seen[0..], options);
+                        sink.finish();
+
+                        return .{ .subcommand = .{
+                            .parsed = parsed,
+                            .command = try parseSubcommandStart(
+                                allocator,
+                                user_args,
+                                options,
+                                invocation.subcommand_index,
+                                invocation.argv_index,
+                                invocation.user_arg_index,
+                            ),
+                        } };
+                    } else {
+                        unreachable;
+                    }
+                },
+            }
         }
 
-        fn parseSubcommandInvocation(
+        fn controlResult(control: schema.StandardControl) Result {
+            switch (control) {
+                .help => return .help,
+                .version => {
+                    if (comptime has_version) {
+                        return .version;
+                    }
+                    unreachable;
+                },
+            }
+        }
+
+        fn parseSubcommandStart(
             allocator: std.mem.Allocator,
             user_args: []const []const u8,
             options: ParseOptions,
-            invocation: parser.SubcommandInvocation,
+            subcommand_index: usize,
+            argv_index: usize,
+            user_arg_index: usize,
         ) ParseError!SubcommandResult {
             const fields = @typeInfo(@TypeOf(subcommands)).@"struct".fields;
 
-            inline for (fields, 0..) |field_info, subcommand_index| {
-                if (invocation.subcommand_index == subcommand_index) {
+            if (comptime fields.len == 0) {
+                unreachable;
+            }
+
+            switch (subcommand_index) {
+                inline 0...fields.len - 1 => |child_index| {
+                    const field_info = fields[child_index];
                     const Child = @field(subcommands, field_info.name);
-                    const child_user_args = user_args[invocation.user_arg_index + 1 ..];
-                    const child_argv_index_base = invocation.argv_index + 1;
+                    const child_user_args = user_args[user_arg_index + 1 ..];
+                    const child_argv_index_base = argv_index + 1;
                     const child_result = try Child.parseUserArgs(
                         allocator,
                         child_user_args,
@@ -140,23 +437,37 @@ pub fn Command(comptime declaration: anytype) type {
                         options,
                     );
                     return @unionInit(SubcommandResult, field_info.name, child_result);
-                }
+                },
+                else => unreachable,
             }
-
-            unreachable;
         }
 
         pub fn deinit(allocator: std.mem.Allocator, result: *Result) void {
             if (comptime has_subcommands) {
-                switch (result.*) {
-                    .parsed => |*parsed| deinitParsed(allocator, parsed),
-                    .help, .version => {},
-                    .subcommand => |*subcommand_node| deinitSubcommand(allocator, subcommand_node),
+                if (comptime has_version) {
+                    switch (result.*) {
+                        .parsed => |*parsed| deinitParsed(allocator, parsed),
+                        .help, .version => {},
+                        .subcommand => |*subcommand_node| deinitSubcommand(allocator, subcommand_node),
+                    }
+                } else {
+                    switch (result.*) {
+                        .parsed => |*parsed| deinitParsed(allocator, parsed),
+                        .help => {},
+                        .subcommand => |*subcommand_node| deinitSubcommand(allocator, subcommand_node),
+                    }
                 }
             } else {
-                switch (result.*) {
-                    .parsed => |*parsed| deinitParsed(allocator, parsed),
-                    .help, .version => {},
+                if (comptime has_version) {
+                    switch (result.*) {
+                        .parsed => |*parsed| deinitParsed(allocator, parsed),
+                        .help, .version => {},
+                    }
+                } else {
+                    switch (result.*) {
+                        .parsed => |*parsed| deinitParsed(allocator, parsed),
+                        .help => {},
+                    }
                 }
             }
         }
@@ -179,12 +490,28 @@ pub fn Command(comptime declaration: anytype) type {
             }
         }
 
+        pub fn writeUsage(writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            return help.writeUsage(writer, declaration.name, args);
+        }
+
+        pub fn writeHelp(writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            return help.writeHelp(writer, declaration.name, command_about, args, subcommands, standard_controls);
+        }
+
+        pub fn writeVersion(writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            if (comptime !has_version) {
+                @compileError("writeVersion requires command version metadata");
+            }
+
+            return help.writeVersion(writer, declaration.name, declaration.version);
+        }
+
         pub fn renderUsage(allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
             return help.renderUsage(allocator, declaration.name, args);
         }
 
         pub fn renderHelp(allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
-            return help.renderHelp(allocator, declaration.name, command_about, args, standard_controls);
+            return help.renderHelp(allocator, declaration.name, command_about, args, subcommands, standard_controls);
         }
 
         pub fn renderVersion(allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
@@ -321,6 +648,25 @@ test "runtime api: parse accepts process argv and skips argv zero" {
     }
 }
 
+test "runtime api: result type omits unreachable version tag without metadata" {
+    const Cli = Command(.{
+        .name = "app",
+        .args = .{},
+    });
+
+    try std.testing.expect(!@hasField(Cli.Result, "version"));
+}
+
+test "runtime api: result type includes version tag with metadata" {
+    const Cli = Command(.{
+        .name = "app",
+        .version = test_version_metadata,
+        .args = .{},
+    });
+
+    try std.testing.expect(@hasField(Cli.Result, "version"));
+}
+
 test "runtime api: parse accepts empty argv as empty process argv" {
     const Cli = Command(.{
         .name = "app",
@@ -453,6 +799,33 @@ test "runtime api: parses standard help without allocation" {
     switch (result) {
         .help => {},
         else => return error.ExpectedHelpResult,
+    }
+}
+
+test "runtime api: parses borrowed-only input without allocation" {
+    const Cli = Command(.{
+        .name = "app",
+        .args = .{
+            .verbose = flag(.{
+                .long = "verbose",
+            }),
+            .output = option([]const u8, .{
+                .long = "output",
+                .required = true,
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{ "app", "--verbose", "--output", "path" };
+    var result = try Cli.parse(std.testing.failing_allocator, argv[0..], .{});
+    defer Cli.deinit(std.testing.failing_allocator, &result);
+
+    switch (result) {
+        .parsed => |parsed| {
+            try std.testing.expect(parsed.verbose);
+            try std.testing.expectEqualStrings("path", parsed.output);
+        },
+        else => return error.ExpectedParsedResult,
     }
 }
 
@@ -1008,6 +1381,120 @@ test "parser: preserves repeated option value matches in command-line order" {
     try std.testing.expectEqualStrings("b", result.include[1]);
 }
 
+test "append: parses append option values correctly after direct accumulation" {
+    const Cli = Command(.{
+        .name = "cc",
+        .args = .{
+            .include = option([]const u8, .{
+                .long = "include",
+                .action = .append,
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{ "cc", "--include", "a", "--include=b", "--include", "c" };
+    var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
+    defer Cli.deinit(std.testing.allocator, &parse_result);
+
+    switch (parse_result) {
+        .parsed => |result| {
+            try std.testing.expectEqual(@as(usize, 3), result.include.len);
+            try std.testing.expectEqualStrings("a", result.include[0]);
+            try std.testing.expectEqualStrings("b", result.include[1]);
+            try std.testing.expectEqualStrings("c", result.include[2]);
+        },
+        else => return error.ExpectedParsedResult,
+    }
+}
+
+test "append: deinit releases only owned append slices" {
+    const Cli = Command(.{
+        .name = "cc",
+        .args = .{
+            .include = option([]const u8, .{
+                .long = "include",
+                .action = .append,
+            }),
+        },
+    });
+
+    const empty_argv = [_][]const u8{"cc"};
+    var empty_result = try Cli.parse(std.testing.allocator, empty_argv[0..], .{});
+    Cli.deinit(std.testing.allocator, &empty_result);
+
+    switch (empty_result) {
+        .parsed => |result| try std.testing.expectEqual(@as(usize, 0), result.include.len),
+        else => return error.ExpectedParsedResult,
+    }
+
+    const non_empty_argv = [_][]const u8{ "cc", "--include", "a" };
+    var non_empty_result = try Cli.parse(std.testing.allocator, non_empty_argv[0..], .{});
+    Cli.deinit(std.testing.allocator, &non_empty_result);
+
+    switch (non_empty_result) {
+        .parsed => |result| try std.testing.expectEqual(@as(usize, 0), result.include.len),
+        else => return error.ExpectedParsedResult,
+    }
+}
+
+test "append: preserves diagnostics for invalid appended values" {
+    const Mode = enum { fast };
+    const Cli = Command(.{
+        .name = "app",
+        .args = .{
+            .mode = option(Mode, .{
+                .short = 'm',
+                .action = .append,
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{ "app", "-mquick" };
+    var diagnostic: Diagnostic = undefined;
+
+    try std.testing.expectError(error.ParseFailed, Cli.parse(std.testing.allocator, argv[0..], .{
+        .diagnostic = &diagnostic,
+    }));
+
+    try std.testing.expectEqual(ParseErrorKind.invalid_value, diagnostic.kind);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.argv_index);
+    try std.testing.expectEqual(@as(?usize, 1), diagnostic.cluster_offset);
+    try std.testing.expectEqualStrings("mode", diagnostic.arg_name.?);
+    try std.testing.expectEqualStrings("-mquick", diagnostic.raw_arg.?);
+    try std.testing.expectEqualStrings("quick", diagnostic.value.?);
+}
+
+test "runtime api: append command only allocates returned append slices" {
+    const Cli = Command(.{
+        .name = "cc",
+        .args = .{
+            .include = option([]const u8, .{
+                .long = "include",
+                .action = .append,
+            }),
+        },
+    });
+
+    var counting = CountingAllocator.init(std.testing.allocator);
+    const allocator = counting.allocator();
+
+    const argv = [_][]const u8{ "cc", "--include", "a", "--include", "b", "--include=c" };
+    var parse_result = try Cli.parse(allocator, argv[0..], .{});
+    defer Cli.deinit(allocator, &parse_result);
+
+    switch (parse_result) {
+        .parsed => |result| {
+            try std.testing.expectEqual(@as(usize, 3), result.include.len);
+            try std.testing.expectEqualStrings("a", result.include[0]);
+            try std.testing.expectEqualStrings("b", result.include[1]);
+            try std.testing.expectEqualStrings("c", result.include[2]);
+        },
+        else => return error.ExpectedParsedResult,
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), counting.alloc_count);
+}
+
 test "parser: reports unknown long option with diagnostic" {
     const Cli = Command(.{
         .name = "app",
@@ -1283,16 +1770,16 @@ test "semantic: reports count action overflow with diagnostic" {
     var result: schema.buildResultType(args) = .{
         .verbose = std.math.maxInt(u32),
     };
-    const matches = [_]parser.Match{.{
+    const match: parser.Match = .{
         .arg_index = 0,
         .raw_value = null,
         .argv_index = 0,
         .raw_arg = "-v",
         .cluster_offset = 1,
-    }};
+    };
     var diagnostic: Diagnostic = undefined;
 
-    try std.testing.expectError(error.ParseFailed, semantic.applyMatches(args, std.testing.allocator, matches[0..], &result, .{
+    try std.testing.expectError(error.ParseFailed, semantic.applyNonAppendMatch("verbose", args.verbose, match, &result, .{
         .diagnostic = &diagnostic,
     }));
 
@@ -1631,6 +2118,89 @@ test "help: renders operand help metadata" {
     , text);
 }
 
+test "help: writes help to writer without allocation" {
+    const Cli = Command(.{
+        .name = "copy",
+        .about = "Copy one file",
+        .args = .{
+            .verbose = flag(.{
+                .long = "verbose",
+                .help = "Print additional progress information",
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{ "copy", "--help" };
+    var parse_result = try Cli.parse(std.testing.failing_allocator, argv[0..], .{});
+    defer Cli.deinit(std.testing.failing_allocator, &parse_result);
+
+    switch (parse_result) {
+        .help => {},
+        else => return error.ExpectedHelpResult,
+    }
+
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try Cli.writeHelp(&writer);
+
+    try std.testing.expectEqualStrings(
+        \\Usage: copy [--verbose]
+        \\
+        \\Copy one file
+        \\
+        \\Options:
+        \\  --verbose  Print additional progress information
+        \\  --help
+        \\
+    , writer.buffered());
+}
+
+test "version: writes version to writer without allocation" {
+    const Cli = Command(.{
+        .name = "copy",
+        .version = test_version_metadata,
+        .args = .{},
+    });
+
+    const text = try Cli.renderVersion(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try Cli.writeVersion(&writer);
+
+    try std.testing.expectEqualStrings(text, writer.buffered());
+}
+
+test "usage: writes usage to writer without allocation" {
+    const Cli = Command(.{
+        .name = "copy",
+        .args = .{
+            .verbose = flag(.{
+                .short = 'v',
+                .long = "verbose",
+            }),
+            .output = option([]const u8, .{
+                .short = 'o',
+                .long = "output",
+                .required = true,
+            }),
+        },
+    });
+
+    const text = try Cli.renderUsage(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+
+    var buffer: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try Cli.writeUsage(&writer);
+
+    try std.testing.expectEqualStrings(text, writer.buffered());
+}
+
 test "help: ignores later invalid arguments after standard help request" {
     const Cli = Command(.{
         .name = "copy",
@@ -1931,6 +2501,125 @@ test "subcommand: parses one nested command" {
     }
 }
 
+test "subcommand: root help lists available subcommands" {
+    const Remote = Command(.{
+        .name = "remote",
+        .about = "Manage remote repositories",
+        .args = .{},
+    });
+    const Status = Command(.{
+        .name = "status",
+        .about = "Show working tree status",
+        .args = .{},
+    });
+    const Cli = Command(.{
+        .name = "mini-git",
+        .about = "Demonstrate nested subcommand parsing",
+        .args = .{},
+        .subcommands = .{
+            .remote = Remote,
+            .status = Status,
+        },
+    });
+
+    const text = try Cli.renderHelp(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+
+    try std.testing.expectEqualStrings(
+        \\Usage: mini-git
+        \\
+        \\Demonstrate nested subcommand parsing
+        \\
+        \\Options:
+        \\  --help
+        \\
+        \\Commands:
+        \\  remote  Manage remote repositories
+        \\  status  Show working tree status
+        \\
+    , text);
+}
+
+test "subcommand: nested help lists available subcommands" {
+    const Add = Command(.{
+        .name = "add",
+        .about = "Add a named remote",
+        .args = .{},
+    });
+    const Remove = Command(.{
+        .name = "remove",
+        .about = "Remove a named remote",
+        .args = .{},
+    });
+    const Remote = Command(.{
+        .name = "remote",
+        .about = "Manage remote repositories",
+        .args = .{},
+        .subcommands = .{
+            .add = Add,
+            .remove = Remove,
+        },
+    });
+    const Status = Command(.{
+        .name = "status",
+        .about = "Show working tree status",
+        .args = .{},
+    });
+    const Cli = Command(.{
+        .name = "mini-git",
+        .args = .{},
+        .subcommands = .{
+            .remote = Remote,
+            .status = Status,
+        },
+    });
+    _ = Cli;
+
+    const text = try Remote.renderHelp(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+
+    try std.testing.expectEqualStrings(
+        \\Usage: remote
+        \\
+        \\Manage remote repositories
+        \\
+        \\Options:
+        \\  --help
+        \\
+        \\Commands:
+        \\  add  Add a named remote
+        \\  remove  Remove a named remote
+        \\
+    , text);
+}
+
+test "subcommand: help omits commands section without subcommands" {
+    const Cli = Command(.{
+        .name = "copy",
+        .about = "Copy one file",
+        .args = .{
+            .verbose = flag(.{
+                .long = "verbose",
+                .help = "Print additional progress information",
+            }),
+        },
+    });
+
+    const text = try Cli.renderHelp(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+
+    try std.testing.expectEqualStrings(
+        \\Usage: copy [--verbose]
+        \\
+        \\Copy one file
+        \\
+        \\Options:
+        \\  --verbose  Print additional progress information
+        \\  --help
+        \\
+    , text);
+}
+
 test "subcommand: reports unknown subcommand" {
     const Cli = Command(.{
         .name = "git",
@@ -2052,6 +2741,72 @@ test "integration: declarative command parses typed result" {
     }
 }
 
+test "integration: optimized parser keeps existing GNU-style permutation behavior" {
+    const Cli = Command(.{
+        .name = "copy",
+        .args = .{
+            .all = flag(.{
+                .short = 'a',
+            }),
+            .binary = flag(.{
+                .short = 'b',
+            }),
+            .verbose = flag(.{
+                .short = 'v',
+                .action = .count,
+            }),
+            .output = option([]const u8, .{
+                .long = "output",
+                .required = true,
+            }),
+            .include = option([]const u8, .{
+                .short = 'I',
+                .long = "include",
+                .action = .append,
+            }),
+            .paths = operand([]const u8, .{
+                .action = .append,
+            }),
+        },
+    });
+
+    const argv = [_][]const u8{
+        "copy",
+        "src1",
+        "-abv",
+        "--output=out",
+        "--include",
+        "inc1",
+        "src2",
+        "--include=inc2",
+        "--",
+        "--literal",
+        "-x",
+    };
+    var parse_result = try Cli.parse(std.testing.allocator, argv[0..], .{});
+    defer Cli.deinit(std.testing.allocator, &parse_result);
+
+    switch (parse_result) {
+        .parsed => |result| {
+            try std.testing.expect(result.all);
+            try std.testing.expect(result.binary);
+            try std.testing.expectEqual(@as(u32, 1), result.verbose);
+            try std.testing.expectEqualStrings("out", result.output);
+
+            try std.testing.expectEqual(@as(usize, 2), result.include.len);
+            try std.testing.expectEqualStrings("inc1", result.include[0]);
+            try std.testing.expectEqualStrings("inc2", result.include[1]);
+
+            try std.testing.expectEqual(@as(usize, 4), result.paths.len);
+            try std.testing.expectEqualStrings("src1", result.paths[0]);
+            try std.testing.expectEqualStrings("src2", result.paths[1]);
+            try std.testing.expectEqualStrings("--literal", result.paths[2]);
+            try std.testing.expectEqualStrings("-x", result.paths[3]);
+        },
+        else => return error.ExpectedParsedResult,
+    }
+}
+
 fn parseTestResult(
     comptime Cli: type,
     allocator: std.mem.Allocator,
@@ -2070,6 +2825,59 @@ fn parseTestResult(
         else => return error.ExpectedParsedResult,
     };
 }
+
+const CountingAllocator = struct {
+    child: std.mem.Allocator,
+    alloc_count: usize = 0,
+    free_count: usize = 0,
+    remap_count: usize = 0,
+
+    fn init(child: std.mem.Allocator) CountingAllocator {
+        return .{ .child = child };
+    }
+
+    fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &vtable,
+        };
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn context(ptr: *anyopaque) *CountingAllocator {
+        return @ptrCast(@alignCast(ptr));
+    }
+
+    fn alloc(ptr: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self = context(ptr);
+        const memory = self.child.rawAlloc(len, alignment, ret_addr) orelse return null;
+        self.alloc_count += 1;
+        return memory;
+    }
+
+    fn resize(ptr: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        return context(ptr).child.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(ptr: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self = context(ptr);
+        const new_memory = self.child.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
+        self.remap_count += 1;
+        return new_memory;
+    }
+
+    fn free(ptr: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self = context(ptr);
+        self.free_count += 1;
+        self.child.rawFree(memory, alignment, ret_addr);
+    }
+};
 
 fn expectOperandToken(token: tokenizer.Token, expected_argv_index: usize, expected_raw: []const u8) !void {
     switch (token) {

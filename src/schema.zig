@@ -39,6 +39,11 @@ pub const LongOption = struct {
     resolution: LongOptionResolution,
 };
 
+pub const ShortOption = struct {
+    ch: u8,
+    arg_index: usize,
+};
+
 pub const LongOptionMap = std.StaticStringMap(LongOptionResolution);
 
 pub const VersionMetadata = struct {
@@ -73,7 +78,7 @@ pub fn resolveAbbreviatedLongOption(
     var matches: usize = 0;
     var resolution: LongOptionResolution = undefined;
 
-    inline for (long_options) |long_option| {
+    for (long_options) |long_option| {
         if (std.mem.startsWith(u8, long_option.name, prefix)) {
             matches += 1;
             resolution = long_option.resolution;
@@ -142,6 +147,90 @@ pub fn buildLongOptions(
 
         return long_options;
     }
+}
+
+pub fn buildShortOptions(comptime args: anytype) [shortOptionCount(args)]ShortOption {
+    comptime {
+        const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+        var short_options: [shortOptionCount(args)]ShortOption = undefined;
+        var index: usize = 0;
+
+        for (fields, 0..) |field_info, arg_index| {
+            const spec = @field(args, field_info.name);
+            if (spec.kind != .operand) {
+                if (spec.short) |short| {
+                    short_options[index] = .{
+                        .ch = short,
+                        .arg_index = arg_index,
+                    };
+                    index += 1;
+                }
+            }
+        }
+
+        if (index != short_options.len) {
+            @compileError("internal short option count mismatch");
+        }
+
+        sortShortOptions(&short_options);
+        return short_options;
+    }
+}
+
+fn sortShortOptions(comptime short_options: []ShortOption) void {
+    std.sort.insertion(ShortOption, short_options, {}, shortOptionLessThan);
+}
+
+fn shortOptionLessThan(_: void, lhs: ShortOption, rhs: ShortOption) bool {
+    return lhs.ch < rhs.ch;
+}
+
+fn shortOptionCount(comptime args: anytype) comptime_int {
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    comptime var count = 0;
+
+    inline for (fields) |field_info| {
+        const spec = @field(args, field_info.name);
+        if (spec.kind != .operand and spec.short != null) {
+            count += 1;
+        }
+    }
+
+    return count;
+}
+
+pub fn buildOperandArgIndexes(comptime args: anytype) [operandCount(args)]usize {
+    comptime {
+        const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+        var indexes: [operandCount(args)]usize = undefined;
+        var index: usize = 0;
+
+        for (fields, 0..) |field_info, arg_index| {
+            if (@field(args, field_info.name).kind == .operand) {
+                indexes[index] = arg_index;
+                index += 1;
+            }
+        }
+
+        if (index != indexes.len) {
+            @compileError("internal operand count mismatch");
+        }
+
+        return indexes;
+    }
+}
+
+fn operandCount(comptime args: anytype) comptime_int {
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    comptime var count = 0;
+
+    inline for (fields) |field_info| {
+        if (@field(args, field_info.name).kind == .operand) {
+            count += 1;
+        }
+    }
+
+    return count;
 }
 
 fn longOptionCount(comptime args: anytype, comptime controls: StandardControls) comptime_int {

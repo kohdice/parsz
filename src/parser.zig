@@ -9,17 +9,16 @@ const Token = tokenizer.Token;
 const ParseError = diagnostics.ParseError;
 const ParseOptions = diagnostics.ParseOptions;
 
-pub const MatchParseResult = union(enum) {
-    matches: []Match,
-    control: schema.StandardControl,
-    subcommand: SubcommandInvocation,
-};
-
-pub const SubcommandInvocation = struct {
-    matches: []Match,
+pub const SubcommandStart = struct {
     subcommand_index: usize,
     argv_index: usize,
     user_arg_index: usize,
+};
+
+pub const ParseOutcome = union(enum) {
+    complete,
+    control: schema.StandardControl,
+    subcommand: SubcommandStart,
 };
 
 pub const Match = struct {
@@ -31,7 +30,6 @@ pub const Match = struct {
     value_argv_index: ?usize = null,
     value_raw_arg: ?[]const u8 = null,
     value_cluster_offset: ?usize = null,
-    arg_occurrence_index: usize = 0,
 };
 
 const ValueLocation = struct {
@@ -41,22 +39,19 @@ const ValueLocation = struct {
     cluster_offset: ?usize = null,
 };
 
-pub fn parseMatches(
+pub fn parseInto(
     comptime args: anytype,
     comptime long_options: []const schema.LongOption,
+    comptime long_option_map: schema.LongOptionMap,
+    comptime short_options: []const schema.ShortOption,
+    comptime operand_arg_indexes: []const usize,
     comptime subcommands: anytype,
-    allocator: std.mem.Allocator,
     user_args: []const []const u8,
     argv_index_base: usize,
     options: ParseOptions,
-) ParseError!MatchParseResult {
-    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+    sink: anytype,
+) ParseError!ParseOutcome {
     const has_subcommands = @typeInfo(@TypeOf(subcommands)).@"struct".fields.len > 0;
-
-    var matches: std.ArrayList(Match) = .empty;
-    errdefer matches.deinit(allocator);
-
-    var occurrence_counts = [_]usize{0} ** fields.len;
 
     var next_operand_ordinal: usize = 0;
     var token_index: usize = 0;
@@ -65,22 +60,20 @@ pub fn parseMatches(
         const token = tokenizer.tokenize(argv_index_base + token_index, user_args[token_index]);
         switch (token) {
             .long_option => |payload| {
-                if (try appendLongOptionMatch(args, long_options, allocator, &matches, occurrence_counts[0..], payload, user_args, &token_index, options)) |control| {
-                    matches.deinit(allocator);
+                if (try emitLongOptionMatch(args, long_options, long_option_map, sink, payload, user_args, &token_index, options)) |control| {
                     return .{ .control = control };
                 }
             },
             .short_option => |payload| {
-                try appendShortOptionMatch(args, allocator, &matches, occurrence_counts[0..], payload, user_args, &token_index, options);
+                try emitShortOptionMatch(args, short_options, sink, payload, user_args, &token_index, options);
             },
             .end_of_options => {
                 token_index += 1;
                 while (token_index < user_args.len) : (token_index += 1) {
-                    try appendOperandMatch(
+                    try emitOperandMatch(
                         args,
-                        allocator,
-                        &matches,
-                        occurrence_counts[0..],
+                        operand_arg_indexes,
+                        sink,
                         argv_index_base + token_index,
                         user_args[token_index],
                         &next_operand_ordinal,
@@ -93,7 +86,6 @@ pub fn parseMatches(
                 if (comptime has_subcommands) {
                     if (findSubcommandIndex(subcommands, payload.raw)) |subcommand_index| {
                         return .{ .subcommand = .{
-                            .matches = matches.toOwnedSlice(allocator) catch return error.OutOfMemory,
                             .subcommand_index = subcommand_index,
                             .argv_index = payload.argv_index,
                             .user_arg_index = token_index,
@@ -108,11 +100,10 @@ pub fn parseMatches(
                     });
                 }
 
-                try appendOperandMatch(
+                try emitOperandMatch(
                     args,
-                    allocator,
-                    &matches,
-                    occurrence_counts[0..],
+                    operand_arg_indexes,
+                    sink,
                     payload.argv_index,
                     payload.raw,
                     &next_operand_ordinal,
@@ -124,7 +115,7 @@ pub fn parseMatches(
         token_index += 1;
     }
 
-    return .{ .matches = matches.toOwnedSlice(allocator) catch return error.OutOfMemory };
+    return .complete;
 }
 
 fn findSubcommandIndex(comptime subcommands: anytype, name: []const u8) ?usize {
@@ -140,25 +131,20 @@ fn findSubcommandIndex(comptime subcommands: anytype, name: []const u8) ?usize {
     return null;
 }
 
-fn appendLongOptionMatch(
+fn emitLongOptionMatch(
     comptime args: anytype,
     comptime long_options: []const schema.LongOption,
-    allocator: std.mem.Allocator,
-    matches: *std.ArrayList(Match),
-    occurrence_counts: []usize,
+    comptime long_option_map: schema.LongOptionMap,
+    sink: anytype,
     payload: @FieldType(Token, "long_option"),
     argv: []const []const u8,
     token_index: *usize,
     options: ParseOptions,
 ) ParseError!?schema.StandardControl {
-    const long_option_map = comptime schema.buildLongOptionMap(long_options);
-
     if (long_option_map.get(payload.name)) |resolution| {
-        return try appendResolvedLongOptionResolution(
+        return try emitResolvedLongOptionResolution(
             args,
-            allocator,
-            matches,
-            occurrence_counts,
+            sink,
             payload,
             argv,
             token_index,
@@ -171,11 +157,9 @@ fn appendLongOptionMatch(
         switch (schema.resolveAbbreviatedLongOption(long_options, payload.name)) {
             .none => {},
             .one => |resolution| {
-                return try appendResolvedLongOptionResolution(
+                return try emitResolvedLongOptionResolution(
                     args,
-                    allocator,
-                    matches,
-                    occurrence_counts,
+                    sink,
                     payload,
                     argv,
                     token_index,
@@ -202,11 +186,9 @@ fn appendLongOptionMatch(
     });
 }
 
-fn appendResolvedLongOptionResolution(
+fn emitResolvedLongOptionResolution(
     comptime args: anytype,
-    allocator: std.mem.Allocator,
-    matches: *std.ArrayList(Match),
-    occurrence_counts: []usize,
+    sink: anytype,
     payload: @FieldType(Token, "long_option"),
     argv: []const []const u8,
     token_index: *usize,
@@ -218,25 +200,27 @@ fn appendResolvedLongOptionResolution(
         .arg => |resolved_arg_index| {
             const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
 
-            inline for (fields, 0..) |field_info, arg_index| {
-                if (arg_index == resolved_arg_index) {
-                    try appendResolvedLongOptionMatch(
+            if (comptime fields.len == 0) {
+                unreachable;
+            }
+
+            switch (resolved_arg_index) {
+                inline 0...fields.len - 1 => |arg_index| {
+                    const field_info = fields[arg_index];
+                    try emitResolvedLongOptionMatch(
                         arg_index,
                         field_info.name,
                         @field(args, field_info.name),
-                        allocator,
-                        matches,
-                        occurrence_counts,
+                        sink,
                         payload,
                         argv,
                         token_index,
                         options,
                     );
                     return null;
-                }
+                },
+                else => unreachable,
             }
-
-            unreachable;
         },
     }
 }
@@ -259,13 +243,11 @@ fn validateStandardControlPayload(
     return control;
 }
 
-fn appendResolvedLongOptionMatch(
+fn emitResolvedLongOptionMatch(
     comptime arg_index: usize,
     comptime arg_name: []const u8,
     comptime spec: ArgSpec,
-    allocator: std.mem.Allocator,
-    matches: *std.ArrayList(Match),
-    occurrence_counts: []usize,
+    sink: anytype,
     payload: @FieldType(Token, "long_option"),
     argv: []const []const u8,
     token_index: *usize,
@@ -283,12 +265,12 @@ fn appendResolvedLongOptionMatch(
                 });
             }
 
-            try appendMatch(allocator, matches, occurrence_counts, .{
+            try sink.emit(arg_index, arg_name, spec, .{
                 .arg_index = arg_index,
                 .raw_value = null,
                 .argv_index = payload.argv_index,
                 .raw_arg = payload.raw,
-            });
+            }, options);
         },
         .option => {
             const value_location: ValueLocation = if (payload.inline_value) |inline_value| .{
@@ -316,7 +298,7 @@ fn appendResolvedLongOptionMatch(
                 };
             };
 
-            try appendMatch(allocator, matches, occurrence_counts, .{
+            try sink.emit(arg_index, arg_name, spec, .{
                 .arg_index = arg_index,
                 .raw_value = value_location.raw_value,
                 .argv_index = payload.argv_index,
@@ -324,97 +306,28 @@ fn appendResolvedLongOptionMatch(
                 .value_argv_index = value_location.argv_index,
                 .value_raw_arg = value_location.raw_arg,
                 .value_cluster_offset = value_location.cluster_offset,
-            });
+            }, options);
         },
         .operand => unreachable,
     }
 }
 
-fn appendShortOptionMatch(
+fn emitShortOptionMatch(
     comptime args: anytype,
-    allocator: std.mem.Allocator,
-    matches: *std.ArrayList(Match),
-    occurrence_counts: []usize,
+    comptime short_options: []const schema.ShortOption,
+    sink: anytype,
     payload: @FieldType(Token, "short_option"),
     argv: []const []const u8,
     token_index: *usize,
     options: ParseOptions,
 ) ParseError!void {
-    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
     var cluster_offset: usize = 1;
 
     while (cluster_offset < payload.raw.len) {
         const ch = payload.raw[cluster_offset];
         const rest = payload.raw[cluster_offset + 1 ..];
-        var found = false;
 
-        inline for (fields, 0..) |field_info, arg_index| {
-            const spec = @field(args, field_info.name);
-            if (!found and spec.kind != .operand) {
-                if (spec.short) |short| {
-                    if (ch == short) {
-                        found = true;
-                        const current_offset = cluster_offset;
-
-                        switch (spec.kind) {
-                            .flag => {
-                                try appendMatch(allocator, matches, occurrence_counts, .{
-                                    .arg_index = arg_index,
-                                    .raw_value = null,
-                                    .argv_index = payload.argv_index,
-                                    .raw_arg = payload.raw,
-                                    .cluster_offset = current_offset,
-                                });
-                                cluster_offset += 1;
-                            },
-                            .option => {
-                                const value_location: ValueLocation = if (rest.len > 0) .{
-                                    .raw_value = rest,
-                                    .argv_index = payload.argv_index,
-                                    .raw_arg = payload.raw,
-                                    .cluster_offset = current_offset,
-                                } else value: {
-                                    const value_index = token_index.* + 1;
-                                    if (value_index >= argv.len) {
-                                        return diagnostics.failWithDiagnostic(options, .{
-                                            .kind = .missing_value,
-                                            .argv_index = payload.argv_index,
-                                            .cluster_offset = current_offset,
-                                            .arg_name = field_info.name,
-                                            .raw_arg = payload.raw,
-                                        });
-                                    }
-
-                                    const value_argv_index = payload.argv_index + (value_index - token_index.*);
-                                    token_index.* = value_index;
-                                    break :value .{
-                                        .raw_value = argv[value_index],
-                                        .argv_index = value_argv_index,
-                                        .raw_arg = argv[value_index],
-                                        .cluster_offset = null,
-                                    };
-                                };
-
-                                try appendMatch(allocator, matches, occurrence_counts, .{
-                                    .arg_index = arg_index,
-                                    .raw_value = value_location.raw_value,
-                                    .argv_index = payload.argv_index,
-                                    .raw_arg = payload.raw,
-                                    .cluster_offset = current_offset,
-                                    .value_argv_index = value_location.argv_index,
-                                    .value_raw_arg = value_location.raw_arg,
-                                    .value_cluster_offset = value_location.cluster_offset,
-                                });
-                                return;
-                            },
-                            .operand => unreachable,
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!found) {
+        if (comptime short_options.len == 0) {
             return diagnostics.failWithDiagnostic(options, .{
                 .kind = .unknown_option,
                 .argv_index = payload.argv_index,
@@ -422,56 +335,169 @@ fn appendShortOptionMatch(
                 .raw_arg = payload.raw,
             });
         }
+
+        const short_option_index = std.sort.binarySearch(
+            schema.ShortOption,
+            short_options,
+            ch,
+            compareShortOption,
+        ) orelse {
+            return diagnostics.failWithDiagnostic(options, .{
+                .kind = .unknown_option,
+                .argv_index = payload.argv_index,
+                .cluster_offset = cluster_offset,
+                .raw_arg = payload.raw,
+            });
+        };
+
+        if (try emitResolvedShortOptionMatch(
+            args,
+            short_options[short_option_index].arg_index,
+            sink,
+            payload,
+            rest,
+            argv,
+            token_index,
+            cluster_offset,
+            options,
+        )) {
+            return;
+        }
+
+        cluster_offset += 1;
     }
 }
 
-fn appendOperandMatch(
+fn compareShortOption(ch: u8, short_option: schema.ShortOption) std.math.Order {
+    return std.math.order(ch, short_option.ch);
+}
+
+fn emitResolvedShortOptionMatch(
     comptime args: anytype,
-    allocator: std.mem.Allocator,
-    matches: *std.ArrayList(Match),
-    occurrence_counts: []usize,
+    resolved_arg_index: usize,
+    sink: anytype,
+    payload: @FieldType(Token, "short_option"),
+    rest: []const u8,
+    argv: []const []const u8,
+    token_index: *usize,
+    cluster_offset: usize,
+    options: ParseOptions,
+) ParseError!bool {
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+    if (comptime fields.len == 0) {
+        unreachable;
+    }
+
+    switch (resolved_arg_index) {
+        inline 0...fields.len - 1 => |arg_index| {
+            const field_info = fields[arg_index];
+            const spec = @field(args, field_info.name);
+
+            switch (spec.kind) {
+                .flag => {
+                    try sink.emit(arg_index, field_info.name, spec, .{
+                        .arg_index = arg_index,
+                        .raw_value = null,
+                        .argv_index = payload.argv_index,
+                        .raw_arg = payload.raw,
+                        .cluster_offset = cluster_offset,
+                    }, options);
+                    return false;
+                },
+                .option => {
+                    const value_location: ValueLocation = if (rest.len > 0) .{
+                        .raw_value = rest,
+                        .argv_index = payload.argv_index,
+                        .raw_arg = payload.raw,
+                        .cluster_offset = cluster_offset,
+                    } else value: {
+                        const value_index = token_index.* + 1;
+                        if (value_index >= argv.len) {
+                            return diagnostics.failWithDiagnostic(options, .{
+                                .kind = .missing_value,
+                                .argv_index = payload.argv_index,
+                                .cluster_offset = cluster_offset,
+                                .arg_name = field_info.name,
+                                .raw_arg = payload.raw,
+                            });
+                        }
+
+                        const value_argv_index = payload.argv_index + (value_index - token_index.*);
+                        token_index.* = value_index;
+                        break :value .{
+                            .raw_value = argv[value_index],
+                            .argv_index = value_argv_index,
+                            .raw_arg = argv[value_index],
+                            .cluster_offset = null,
+                        };
+                    };
+
+                    try sink.emit(arg_index, field_info.name, spec, .{
+                        .arg_index = arg_index,
+                        .raw_value = value_location.raw_value,
+                        .argv_index = payload.argv_index,
+                        .raw_arg = payload.raw,
+                        .cluster_offset = cluster_offset,
+                        .value_argv_index = value_location.argv_index,
+                        .value_raw_arg = value_location.raw_arg,
+                        .value_cluster_offset = value_location.cluster_offset,
+                    }, options);
+                    return true;
+                },
+                .operand => unreachable,
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn emitOperandMatch(
+    comptime args: anytype,
+    comptime operand_arg_indexes: []const usize,
+    sink: anytype,
     argv_index: usize,
     raw: []const u8,
     next_operand_ordinal: *usize,
     options: ParseOptions,
 ) ParseError!void {
-    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-    var operand_ordinal: usize = 0;
-
-    inline for (fields, 0..) |field_info, arg_index| {
-        const spec = @field(args, field_info.name);
-        if (spec.kind == .operand) {
-            if (operand_ordinal == next_operand_ordinal.*) {
-                if (spec.action != .append) {
-                    next_operand_ordinal.* += 1;
-                }
-                try appendMatch(allocator, matches, occurrence_counts, .{
-                    .arg_index = arg_index,
-                    .raw_value = raw,
-                    .argv_index = argv_index,
-                    .raw_arg = raw,
-                });
-                return;
-            }
-            operand_ordinal += 1;
-        }
+    if (comptime operand_arg_indexes.len == 0) {
+        return diagnostics.failWithDiagnostic(options, .{
+            .kind = .unexpected_operand,
+            .argv_index = argv_index,
+            .raw_arg = raw,
+        });
     }
 
-    return diagnostics.failWithDiagnostic(options, .{
-        .kind = .unexpected_operand,
-        .argv_index = argv_index,
-        .raw_arg = raw,
-    });
-}
+    if (next_operand_ordinal.* >= operand_arg_indexes.len) {
+        return diagnostics.failWithDiagnostic(options, .{
+            .kind = .unexpected_operand,
+            .argv_index = argv_index,
+            .raw_arg = raw,
+        });
+    }
 
-fn appendMatch(
-    allocator: std.mem.Allocator,
-    matches: *std.ArrayList(Match),
-    occurrence_counts: []usize,
-    match: Match,
-) ParseError!void {
-    var next = match;
-    next.arg_occurrence_index = occurrence_counts[match.arg_index];
-    matches.append(allocator, next) catch return error.OutOfMemory;
-    occurrence_counts[match.arg_index] += 1;
+    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
+
+    if (comptime fields.len == 0) {
+        unreachable;
+    }
+
+    switch (operand_arg_indexes[next_operand_ordinal.*]) {
+        inline 0...fields.len - 1 => |arg_index| {
+            const field_info = fields[arg_index];
+            const spec = @field(args, field_info.name);
+            if (spec.action != .append) {
+                next_operand_ordinal.* += 1;
+            }
+            try sink.emit(arg_index, field_info.name, spec, .{
+                .arg_index = arg_index,
+                .raw_value = raw,
+                .argv_index = argv_index,
+                .raw_arg = raw,
+            }, options);
+            return;
+        },
+        else => unreachable,
+    }
 }

@@ -2,129 +2,107 @@ const std = @import("std");
 
 const diagnostics = @import("diagnostic.zig");
 const parser = @import("parser.zig");
+const schema = @import("schema.zig");
 const value_parser = @import("value_parser.zig");
 
 const Match = parser.Match;
 const ParseError = diagnostics.ParseError;
 const ParseOptions = diagnostics.ParseOptions;
 
-pub fn applyMatches(
-    comptime args: anytype,
-    allocator: std.mem.Allocator,
-    matches: []const Match,
-    result: anytype,
-    options: ParseOptions,
-) ParseError!void {
-    for (matches) |match| {
-        try applyMatch(args, allocator, matches, match, result, options);
-    }
-}
-
-fn applyMatch(
-    comptime args: anytype,
-    allocator: std.mem.Allocator,
-    matches: []const Match,
+pub fn applyNonAppendMatch(
+    comptime arg_name: []const u8,
+    comptime spec: schema.ArgSpec,
     match: Match,
     result: anytype,
     options: ParseOptions,
 ) ParseError!void {
-    const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
-
-    inline for (fields, 0..) |field_info, arg_index| {
-        const spec = @field(args, field_info.name);
-        if (match.arg_index == arg_index) {
-            switch (spec.action) {
-                .set_true => {
-                    if (match.raw_value != null) {
-                        return diagnostics.failWithDiagnostic(options, .{
-                            .kind = .unexpected_value,
-                            .argv_index = match.argv_index,
-                            .cluster_offset = match.cluster_offset,
-                            .arg_name = field_info.name,
-                            .raw_arg = match.raw_arg,
-                            .value = match.raw_value,
-                        });
-                    }
-                    @field(result.*, field_info.name) = true;
-                },
-                .count => {
-                    if (match.raw_value != null) {
-                        return diagnostics.failWithDiagnostic(options, .{
-                            .kind = .unexpected_value,
-                            .argv_index = match.argv_index,
-                            .cluster_offset = match.cluster_offset,
-                            .arg_name = field_info.name,
-                            .raw_arg = match.raw_arg,
-                            .value = match.raw_value,
-                        });
-                    }
-
-                    @field(result.*, field_info.name) = std.math.add(
-                        u32,
-                        @field(result.*, field_info.name),
-                        1,
-                    ) catch return diagnostics.failWithDiagnostic(options, .{
-                        .kind = .overflow,
-                        .argv_index = match.argv_index,
-                        .cluster_offset = match.cluster_offset,
-                        .arg_name = field_info.name,
-                        .raw_arg = match.raw_arg,
-                    });
-                },
-                .set => {
-                    const raw_value = match.raw_value orelse return diagnostics.failWithDiagnostic(options, .{
-                        .kind = .missing_value,
-                        .argv_index = match.argv_index,
-                        .cluster_offset = match.cluster_offset,
-                        .arg_name = field_info.name,
-                        .raw_arg = match.raw_arg,
-                    });
-
-                    @field(result.*, field_info.name) = try parseValue(
-                        spec.value_type,
-                        raw_value,
-                        match,
-                        field_info.name,
-                        options,
-                    );
-                },
-                .append => {
-                    if (match.arg_occurrence_index != 0) {
-                        return;
-                    }
-
-                    const value_count = countMatchesForArg(matches, arg_index);
-                    const values = allocator.alloc(spec.value_type, value_count) catch return error.OutOfMemory;
-                    errdefer allocator.free(values);
-
-                    for (matches) |append_match| {
-                        if (append_match.arg_index == arg_index) {
-                            const raw_value = append_match.raw_value orelse return diagnostics.failWithDiagnostic(options, .{
-                                .kind = .missing_value,
-                                .argv_index = append_match.argv_index,
-                                .cluster_offset = append_match.cluster_offset,
-                                .arg_name = field_info.name,
-                                .raw_arg = append_match.raw_arg,
-                            });
-
-                            values[append_match.arg_occurrence_index] = try parseValue(
-                                spec.value_type,
-                                raw_value,
-                                append_match,
-                                field_info.name,
-                                options,
-                            );
-                        }
-                    }
-
-                    @field(result.*, field_info.name) = values;
-                },
+    switch (spec.action) {
+        .set_true => {
+            if (match.raw_value != null) {
+                return diagnostics.failWithDiagnostic(options, .{
+                    .kind = .unexpected_value,
+                    .argv_index = match.argv_index,
+                    .cluster_offset = match.cluster_offset,
+                    .arg_name = arg_name,
+                    .raw_arg = match.raw_arg,
+                    .value = match.raw_value,
+                });
             }
-            return;
-        }
+            @field(result.*, arg_name) = true;
+        },
+        .count => {
+            if (match.raw_value != null) {
+                return diagnostics.failWithDiagnostic(options, .{
+                    .kind = .unexpected_value,
+                    .argv_index = match.argv_index,
+                    .cluster_offset = match.cluster_offset,
+                    .arg_name = arg_name,
+                    .raw_arg = match.raw_arg,
+                    .value = match.raw_value,
+                });
+            }
+
+            @field(result.*, arg_name) = std.math.add(
+                u32,
+                @field(result.*, arg_name),
+                1,
+            ) catch return diagnostics.failWithDiagnostic(options, .{
+                .kind = .overflow,
+                .argv_index = match.argv_index,
+                .cluster_offset = match.cluster_offset,
+                .arg_name = arg_name,
+                .raw_arg = match.raw_arg,
+            });
+        },
+        .set => {
+            const raw_value = match.raw_value orelse return diagnostics.failWithDiagnostic(options, .{
+                .kind = .missing_value,
+                .argv_index = match.argv_index,
+                .cluster_offset = match.cluster_offset,
+                .arg_name = arg_name,
+                .raw_arg = match.raw_arg,
+            });
+
+            @field(result.*, arg_name) = try parseValue(
+                spec.value_type,
+                raw_value,
+                match,
+                arg_name,
+                options,
+            );
+        },
+        .append => @compileError("applyNonAppendMatch requires a non-append argument"),
+    }
+}
+
+pub fn applyAppendMatch(
+    comptime arg_name: []const u8,
+    comptime spec: schema.ArgSpec,
+    match: Match,
+    values: []spec.value_type,
+    index: usize,
+    options: ParseOptions,
+) ParseError!void {
+    if (comptime spec.action != .append) {
+        @compileError("applyAppendMatch requires an append argument");
     }
 
-    unreachable;
+    const raw_value = match.raw_value orelse return diagnostics.failWithDiagnostic(options, .{
+        .kind = .missing_value,
+        .argv_index = match.argv_index,
+        .cluster_offset = match.cluster_offset,
+        .arg_name = arg_name,
+        .raw_arg = match.raw_arg,
+    });
+
+    const value = try parseValue(
+        spec.value_type,
+        raw_value,
+        match,
+        arg_name,
+        options,
+    );
+    values[index] = value;
 }
 
 fn parseValue(
@@ -170,36 +148,16 @@ fn valueClusterOffset(match: Match) ?usize {
     return match.cluster_offset;
 }
 
-pub fn validateRequiredMatches(comptime args: anytype, matches: []const Match, options: ParseOptions) ParseError!void {
+pub fn validateRequiredSeen(comptime args: anytype, seen: []const bool, options: ParseOptions) ParseError!void {
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
 
     inline for (fields, 0..) |field_info, arg_index| {
         const spec = @field(args, field_info.name);
-        if (spec.required and !hasMatchForArg(matches, arg_index)) {
+        if (spec.required and !seen[arg_index]) {
             return diagnostics.failWithDiagnostic(options, .{
                 .kind = .missing_required,
                 .arg_name = field_info.name,
             });
         }
     }
-}
-
-fn countMatchesForArg(matches: []const Match, arg_index: usize) usize {
-    var count: usize = 0;
-    for (matches) |match| {
-        if (match.arg_index == arg_index) {
-            count += 1;
-        }
-    }
-    return count;
-}
-
-fn hasMatchForArg(matches: []const Match, arg_index: usize) bool {
-    for (matches) |match| {
-        if (match.arg_index == arg_index) {
-            return true;
-        }
-    }
-
-    return false;
 }

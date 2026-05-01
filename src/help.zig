@@ -7,12 +7,20 @@ pub fn renderUsage(
     comptime command_name: []const u8,
     comptime args: anytype,
 ) std.mem.Allocator.Error![]const u8 {
-    var buffer: std.ArrayList(u8) = .empty;
-    errdefer buffer.deinit(allocator);
+    var buffer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer buffer.deinit();
 
-    try appendUsageLine(&buffer, allocator, command_name, args);
-    try buffer.append(allocator, '\n');
-    return buffer.toOwnedSlice(allocator);
+    writeUsage(&buffer.writer, command_name, args) catch return error.OutOfMemory;
+    return buffer.toOwnedSlice();
+}
+
+pub fn writeUsage(
+    writer: *std.Io.Writer,
+    comptime command_name: []const u8,
+    comptime args: anytype,
+) std.Io.Writer.Error!void {
+    try writeUsageLine(writer, command_name, args);
+    try writer.writeAll("\n");
 }
 
 pub fn renderHelp(
@@ -20,50 +28,92 @@ pub fn renderHelp(
     comptime command_name: []const u8,
     comptime command_about: ?[]const u8,
     comptime args: anytype,
+    comptime subcommands: anytype,
     comptime controls: schema.StandardControls,
 ) std.mem.Allocator.Error![]const u8 {
-    var buffer: std.ArrayList(u8) = .empty;
-    errdefer buffer.deinit(allocator);
+    var buffer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer buffer.deinit();
 
-    try appendUsageLine(&buffer, allocator, command_name, args);
+    writeHelp(&buffer.writer, command_name, command_about, args, subcommands, controls) catch return error.OutOfMemory;
+    return buffer.toOwnedSlice();
+}
+
+pub fn writeHelp(
+    writer: *std.Io.Writer,
+    comptime command_name: []const u8,
+    comptime command_about: ?[]const u8,
+    comptime args: anytype,
+    comptime subcommands: anytype,
+    comptime controls: schema.StandardControls,
+) std.Io.Writer.Error!void {
+    try writeUsageLine(writer, command_name, args);
     if (command_about) |about| {
-        try buffer.print(allocator, "\n\n{s}", .{about});
+        try writer.writeAll("\n\n");
+        try writer.writeAll(about);
     }
-    try buffer.appendSlice(allocator, "\n\nOptions:\n");
+    try writer.writeAll("\n\nOptions:\n");
 
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
     inline for (fields) |field_info| {
         const spec = @field(args, field_info.name);
         if (spec.kind != .operand) {
-            try appendOptionLine(&buffer, allocator, field_info.name, spec);
+            try writeOptionLine(writer, field_info.name, spec);
         }
     }
 
-    try appendStandardControlLines(&buffer, allocator, controls);
+    try writeStandardControlLines(writer, controls);
+
+    if (comptime hasSubcommandHelp(subcommands)) {
+        try writer.writeAll("\nCommands:\n");
+        try writeSubcommandLines(writer, subcommands);
+    }
 
     if (comptime hasOperandHelp(args)) {
-        try buffer.appendSlice(allocator, "\nOperands:\n");
+        try writer.writeAll("\nOperands:\n");
         inline for (fields) |field_info| {
             const spec = @field(args, field_info.name);
             if (spec.kind == .operand) {
-                try appendOperandLine(&buffer, allocator, field_info.name, spec);
+                try writeOperandLine(writer, field_info.name, spec);
             }
         }
     }
-
-    return buffer.toOwnedSlice(allocator);
 }
 
-fn appendStandardControlLines(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+fn writeStandardControlLines(
+    writer: *std.Io.Writer,
     comptime controls: schema.StandardControls,
-) std.mem.Allocator.Error!void {
+) std.Io.Writer.Error!void {
     if (comptime controls.help) {
-        try buffer.print(allocator, "  --{s}\n", .{schema.standardControlLongName(.help)});
+        try writer.writeAll("  --");
+        try writer.writeAll(schema.standardControlLongName(.help));
+        try writer.writeByte('\n');
     }
     if (comptime controls.version) {
-        try buffer.print(allocator, "  --{s}\n", .{schema.standardControlLongName(.version)});
+        try writer.writeAll("  --");
+        try writer.writeAll(schema.standardControlLongName(.version));
+        try writer.writeByte('\n');
+    }
+}
+
+fn hasSubcommandHelp(comptime subcommands: anytype) bool {
+    return @typeInfo(@TypeOf(subcommands)).@"struct".fields.len > 0;
+}
+
+fn writeSubcommandLines(
+    writer: *std.Io.Writer,
+    comptime subcommands: anytype,
+) std.Io.Writer.Error!void {
+    const fields = @typeInfo(@TypeOf(subcommands)).@"struct".fields;
+
+    inline for (fields) |field_info| {
+        const Child = @field(subcommands, field_info.name);
+        try writer.writeAll("  ");
+        try writer.writeAll(Child.name);
+        if (Child.about) |about| {
+            try writer.writeAll("  ");
+            try writer.writeAll(about);
+        }
+        try writer.writeByte('\n');
     }
 }
 
@@ -72,63 +122,78 @@ pub fn renderVersion(
     comptime command_name: []const u8,
     comptime version: schema.VersionMetadata,
 ) std.mem.Allocator.Error![]const u8 {
-    var buffer: std.ArrayList(u8) = .empty;
-    errdefer buffer.deinit(allocator);
+    var buffer: std.Io.Writer.Allocating = .init(allocator);
+    errdefer buffer.deinit();
 
-    try buffer.print(allocator, "{s} {s}\n{s}", .{ command_name, version.number, version.details });
-    if (version.details[version.details.len - 1] != '\n') {
-        try buffer.append(allocator, '\n');
-    }
-    return buffer.toOwnedSlice(allocator);
+    writeVersion(&buffer.writer, command_name, version) catch return error.OutOfMemory;
+    return buffer.toOwnedSlice();
 }
 
-fn appendUsageLine(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+pub fn writeVersion(
+    writer: *std.Io.Writer,
+    comptime command_name: []const u8,
+    comptime version: schema.VersionMetadata,
+) std.Io.Writer.Error!void {
+    try writer.writeAll(command_name);
+    try writer.writeByte(' ');
+    try writer.writeAll(version.number);
+    try writer.writeByte('\n');
+    try writer.writeAll(version.details);
+    if (version.details[version.details.len - 1] != '\n') {
+        try writer.writeByte('\n');
+    }
+}
+
+fn writeUsageLine(
+    writer: *std.Io.Writer,
     comptime command_name: []const u8,
     comptime args: anytype,
-) std.mem.Allocator.Error!void {
-    try buffer.print(allocator, "Usage: {s}", .{command_name});
+) std.Io.Writer.Error!void {
+    try writer.writeAll("Usage: ");
+    try writer.writeAll(command_name);
 
     const fields = @typeInfo(@TypeOf(args)).@"struct".fields;
     inline for (fields) |field_info| {
-        try appendUsageArg(buffer, allocator, field_info.name, @field(args, field_info.name));
+        try writeUsageArg(writer, field_info.name, @field(args, field_info.name));
     }
 }
 
-fn appendUsageArg(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+fn writeUsageArg(
+    writer: *std.Io.Writer,
     comptime field_name: []const u8,
     comptime spec: schema.ArgSpec,
-) std.mem.Allocator.Error!void {
-    try buffer.append(allocator, ' ');
+) std.Io.Writer.Error!void {
+    try writer.writeAll(" ");
 
     if (!spec.required) {
-        try buffer.append(allocator, '[');
+        try writer.writeAll("[");
     }
 
     switch (spec.kind) {
-        .flag => try appendOptionSpelling(buffer, allocator, spec),
+        .flag => try writeOptionSpelling(writer, spec),
         .option => {
-            try appendOptionSpelling(buffer, allocator, spec);
-            try buffer.print(allocator, " <{s}>", .{valueName(field_name, spec)});
+            try writeOptionSpelling(writer, spec);
+            try writer.writeAll(" <");
+            try writer.writeAll(valueName(field_name, spec));
+            try writer.writeByte('>');
         },
         .operand => {
             if (spec.required) {
-                try buffer.print(allocator, "<{s}>", .{valueName(field_name, spec)});
+                try writer.writeByte('<');
+                try writer.writeAll(valueName(field_name, spec));
+                try writer.writeByte('>');
             } else {
-                try buffer.appendSlice(allocator, valueName(field_name, spec));
+                try writer.writeAll(valueName(field_name, spec));
             }
         },
     }
 
     if (!spec.required) {
-        try buffer.append(allocator, ']');
+        try writer.writeAll("]");
     }
 
     if (spec.action == .append) {
-        try buffer.appendSlice(allocator, "...");
+        try writer.writeAll("...");
     }
 }
 
@@ -136,55 +201,62 @@ fn valueName(comptime field_name: []const u8, comptime spec: schema.ArgSpec) []c
     return spec.value_name orelse field_name;
 }
 
-fn appendOptionSpelling(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+fn writeOptionSpelling(
+    writer: *std.Io.Writer,
     comptime spec: schema.ArgSpec,
-) std.mem.Allocator.Error!void {
+) std.Io.Writer.Error!void {
     if (spec.short) |short| {
-        try buffer.print(allocator, "-{c}", .{short});
+        try writer.writeByte('-');
+        try writer.writeByte(short);
         if (spec.long) |long| {
-            try buffer.print(allocator, "|--{s}", .{long});
+            try writer.writeAll("|--");
+            try writer.writeAll(long);
         }
         return;
     }
 
     if (spec.long) |long| {
-        try buffer.print(allocator, "--{s}", .{long});
+        try writer.writeAll("--");
+        try writer.writeAll(long);
         return;
     }
 
     unreachable;
 }
 
-fn appendOptionLine(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+fn writeOptionLine(
+    writer: *std.Io.Writer,
     comptime field_name: []const u8,
     comptime spec: schema.ArgSpec,
-) std.mem.Allocator.Error!void {
-    try buffer.appendSlice(allocator, "  ");
+) std.Io.Writer.Error!void {
+    try writer.writeAll("  ");
 
     if (spec.short) |short| {
-        try buffer.print(allocator, "-{c}", .{short});
+        try writer.writeByte('-');
+        try writer.writeByte(short);
         if (spec.long) |long| {
-            try buffer.print(allocator, ", --{s}", .{long});
+            try writer.writeAll(", --");
+            try writer.writeAll(long);
         }
     } else if (spec.long) |long| {
-        try buffer.print(allocator, "--{s}", .{long});
+        try writer.writeAll("--");
+        try writer.writeAll(long);
     } else {
         unreachable;
     }
 
     if (spec.kind == .option) {
-        try buffer.print(allocator, " <{s}>", .{valueName(field_name, spec)});
+        try writer.writeAll(" <");
+        try writer.writeAll(valueName(field_name, spec));
+        try writer.writeByte('>');
     }
 
     if (spec.help) |help_text| {
-        try buffer.print(allocator, "  {s}", .{help_text});
+        try writer.writeAll("  ");
+        try writer.writeAll(help_text);
     }
 
-    try buffer.append(allocator, '\n');
+    try writer.writeByte('\n');
 }
 
 fn hasOperandHelp(comptime args: anytype) bool {
@@ -200,41 +272,43 @@ fn hasOperandHelp(comptime args: anytype) bool {
     return false;
 }
 
-fn appendOperandLine(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+fn writeOperandLine(
+    writer: *std.Io.Writer,
     comptime field_name: []const u8,
     comptime spec: schema.ArgSpec,
-) std.mem.Allocator.Error!void {
-    try buffer.appendSlice(allocator, "  ");
-    try appendOperandSpelling(buffer, allocator, field_name, spec);
+) std.Io.Writer.Error!void {
+    try writer.writeAll("  ");
+    try writeOperandSpelling(writer, field_name, spec);
 
     if (spec.help) |help_text| {
-        try buffer.print(allocator, "  {s}", .{help_text});
+        try writer.writeAll("  ");
+        try writer.writeAll(help_text);
     }
 
-    try buffer.append(allocator, '\n');
+    try writer.writeByte('\n');
 }
 
-fn appendOperandSpelling(
-    buffer: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
+fn writeOperandSpelling(
+    writer: *std.Io.Writer,
     comptime field_name: []const u8,
     comptime spec: schema.ArgSpec,
-) std.mem.Allocator.Error!void {
+) std.Io.Writer.Error!void {
     const name = valueName(field_name, spec);
 
     if (spec.required) {
-        try buffer.print(allocator, "<{s}>", .{name});
+        try writer.writeByte('<');
+        try writer.writeAll(name);
+        try writer.writeByte('>');
     } else {
-        try buffer.print(allocator, "[{s}", .{name});
+        try writer.writeByte('[');
+        try writer.writeAll(name);
     }
 
     if (!spec.required) {
-        try buffer.append(allocator, ']');
+        try writer.writeAll("]");
     }
 
     if (spec.action == .append) {
-        try buffer.appendSlice(allocator, "...");
+        try writer.writeAll("...");
     }
 }

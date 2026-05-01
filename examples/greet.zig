@@ -52,14 +52,8 @@ pub fn main(init: std.process.Init) !void {
                 try stdout.print("{s}, {s}!\n", .{ result.greeting, result.name });
             }
         },
-        .help => {
-            const text = try Cli.renderHelp(init.arena.allocator());
-            try stdout.writeAll(text);
-        },
-        .version => {
-            const text = try Cli.renderVersion(init.arena.allocator());
-            try stdout.writeAll(text);
-        },
+        .help => try Cli.writeHelp(stdout),
+        .version => try Cli.writeVersion(stdout),
     }
 
     try stdout.flush();
