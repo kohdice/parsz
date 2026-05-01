@@ -38,6 +38,32 @@ pub fn build(b: *std.Build) void {
         .root_module = subcommands_example_mod,
     });
 
+    const bench_optimize = b.option(
+        std.builtin.OptimizeMode,
+        "bench-optimize",
+        "Optimization mode used by benchmark executables",
+    ) orelse .ReleaseFast;
+
+    const bench_parsz_mod = b.createModule(.{
+        .root_source_file = b.path("src/parsz.zig"),
+        .target = target,
+        .optimize = bench_optimize,
+    });
+    const parse_bench_mod = b.createModule(.{
+        .root_source_file = b.path("bench/parse.zig"),
+        .target = target,
+        .optimize = bench_optimize,
+    });
+    parse_bench_mod.addImport("parsz", bench_parsz_mod);
+    const parse_bench = b.addExecutable(.{
+        .name = "parsz-bench-parse",
+        .root_module = parse_bench_mod,
+    });
+    const run_parse_bench = b.addRunArtifact(parse_bench);
+    if (b.args) |args| {
+        run_parse_bench.addArgs(args);
+    }
+
     const compile_error_runner = b.addExecutable(.{
         .name = "compile-error-runner",
         .root_module = b.createModule(.{
@@ -54,4 +80,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&greet_example.step);
     test_step.dependOn(&subcommands_example.step);
     test_step.dependOn(&run_compile_error_tests.step);
+
+    const bench_step = b.step("bench", "Run parser benchmarks");
+    bench_step.dependOn(&run_parse_bench.step);
 }
